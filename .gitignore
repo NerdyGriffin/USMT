@@ -1,3 +1,4 @@
-amd64
-Windows ADK Installers
 *.ffs_lock
+MigStore
+Windows ADK Installers
+amd64
