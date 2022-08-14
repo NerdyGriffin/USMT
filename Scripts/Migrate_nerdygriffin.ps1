@@ -1,1 +1,1 @@
-. (Join-Path "$PSScriptRoot" 'LocalUserMigration.ps1') "$env:COMPUTERNAME\nerdygriffin" "NERDYGRIFFIN\christian.kunis"
+. (Join-Path "$PSScriptRoot" 'LocalUserMigration.ps1') "NERDYGRIFFIN\nerdygriffin" "NERDYGRIFFIN\christian.kunis"
