@@ -1,5 +1,7 @@
 $LocalUserName = $args[0]
 
+Unblock-File (Join-Path "$PSScriptRoot" 'CloneUSMT.ps1')
+
 . (Join-Path "$PSScriptRoot" 'CloneUSMT.ps1')
 
 $ProgFilePath = (Join-Path "$MigPath" ("prog_" + (Split-Path -Path "$LocalUserName" -Leaf) + ".log"))
