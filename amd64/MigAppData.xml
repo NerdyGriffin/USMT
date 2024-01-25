@@ -30,7 +30,7 @@
 	<component context="User" type="Application">
         <displayName>Roaming AppData</displayName>
         <paths>
-            <path type="File">%CSIDL_LOCAL_APPDATA%</path>
+            <path type="File">%CSIDL_APPDATA%</path>
         </paths>
         <role role="Settings">
             <rules>
