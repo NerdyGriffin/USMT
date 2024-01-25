@@ -1,6 +1,6 @@
-$LocalUserName = "$env:COMPUTERNAME\WCOffice"
-$DomainUserName = "WHC\wcoffice"
+$OldUserName = "$env:COMPUTERNAME\WCOffice"
+$NewUserName = "WHC\wcoffice"
 
-. (Join-Path "$PSScriptRoot" 'ScanState_Win7.ps1') "$LocalUserName"
+. (Join-Path "$PSScriptRoot" 'ScanState_Win7.ps1') "$OldUserName"
 
-. (Join-Path "$PSScriptRoot" 'LoadState_Helper.ps1') "$LocalUserName" "$DomainUserName"
+. (Join-Path "$PSScriptRoot" 'LoadState_Helper.ps1') "$OldUserName" "$NewUserName"

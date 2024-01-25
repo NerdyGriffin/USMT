@@ -6,14 +6,14 @@ if (-not(Test-Path "$LocalUSMTPath")) {
 
 $global:RemoteUSMTPath = '\\files.nerdygriffin.net\programfiles\USMT'
 
-$global:MigPath = (Join-Path (Join-Path $RemoteUSMTPath "MigStore") $env:COMPUTERNAME)
-if (-not(Test-Path "$MigPath")) {
-	Write-Host "Creating directory '$MigPath'"
-	New-Item -Path "$MigPath" -ItemType Directory
+$global:MigStorePath = (Join-Path (Join-Path $RemoteUSMTPath "MigStore") $env:COMPUTERNAME)
+if (-not(Test-Path "$MigStorePath")) {
+	Write-Host "Creating directory '$MigStorePath'"
+	New-Item -Path "$MigStorePath" -ItemType Directory
 }
 
 $global:LocalExecutablePath = (Join-Path $LocalUSMTPath 'amd64')
-if (-not(Test-Path "$LocalExecutablePath")) {
+if (-not((Test-Path "$LocalExecutablePath\loadstate.exe") -and (Test-Path "$LocalExecutablePath\savestate.exe"))) {
 	$RemoteExecutablePath = (Join-Path $RemoteUSMTPath 'amd64')
 	Write-Host "Copying '$RemoteExecutablePath' to '$LocalExecutablePath'"
 	Copy-Item -Path "$RemoteExecutablePath" -Destination "$LocalUSMTPath" -Force -Recurse
@@ -26,4 +26,4 @@ Write-Host "Copying '$RemoteScriptPath' to '$LocalScriptPath'"
 Copy-Item -Path "$RemoteScriptPath" -Destination "$LocalUSMTPath" -Force -Recurse
 # }
 
-$global:ConfigPath = (Join-Path "$MigPath" 'Config.xml')
+$global:ConfigPath = (Join-Path "$MigStorePath" 'Config.xml')

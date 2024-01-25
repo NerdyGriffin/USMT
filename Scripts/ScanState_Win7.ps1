@@ -1,11 +1,12 @@
-$LocalUserName = $args[0]
-
-Unblock-File (Join-Path "$PSScriptRoot" 'CloneUSMT.ps1')
+$OldUserName = $args[0]
 
 . (Join-Path "$PSScriptRoot" 'CloneUSMT.ps1')
 
-$ProgFilePath = (Join-Path "$MigPath" ("prog_" + (Split-Path -Path "$LocalUserName" -Leaf) + ".log"))
-$LogFilePath = (Join-Path "$MigPath" ("scan_" + (Split-Path -Path "$LocalUserName" -Leaf) + ".log"))
+$LogLabel = $OldUserName -replace '\\', '_'
+
+$ListFilePath = (Join-Path "$MigStorePath" ("list_${LogLabel}.log"))
+$ProgFilePath = (Join-Path "$MigStorePath" ("prog_${LogLabel}.log"))
+$LogFilePath = (Join-Path "$MigStorePath" ("scan_${LogLabel}.log"))
 
 Set-Location "$LocalExecutablePath"
-.\scanstate.exe "$MigPath" /i:MigUser.xml /i:MigApp.xml /i:MigAppData.xml /v:13 /progress:"$ProgFilePath" /l:"$LogFilePath" /o /localonly /c /targetWindows7 /uel:100 #/ue:*\* /ui:"$LocalUserName"
+.\scanstate.exe "$MigStorePath" /o /vsc /i:MigDocs.xml /i:MigApp.xml /i:MigAppData.xml /v:13 /localonly /listfiles:"$ListFilePath" /l:"$LogFilePath" /progress:"$ProgFilePath" /c /uel:100 /targetWindows7
