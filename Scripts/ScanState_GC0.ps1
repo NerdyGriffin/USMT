@@ -39,9 +39,17 @@
     PSRemoting to achieve that without requiring a local logon to GC0.
 
     Capture scope:
-    - /localonly  : local profiles only, no roaming data
-    - /vsc        : Volume Shadow Copy for files locked by running processes
-    - /c          : continue on non-fatal errors
+    - /localonly                    : local profiles only, no roaming data
+    - /vsc                          : Volume Shadow Copy for files locked by running processes
+    - /c                            : continue on non-fatal errors
+    - /i:ExcludeNonUserFolders.xml  : skips reinstallable, non-user-state folders
+                                      at C:\ root (game installs, Python, portable
+                                      apps) that MigDocs.xml would otherwise sweep in
+
+    Note: GC0's secondary Windows disk (D:) and Bazzite btrfs disk (E:) were
+    physically removed before capture, so /localonly sees only the C: system
+    volume. The exclude XML handles the remaining non-user-state folders that
+    live on C: itself.
 
     To restrict capture to specific users, pass /ui and /ue filters to scanstate
     (see USMT documentation for syntax).
@@ -96,6 +104,11 @@ try {
     } else {
         Write-Host "USMT binaries already present on $ComputerName."
     }
+
+    # Always push the custom exclude rule fresh, even when binaries are cached,
+    # so script-tracked changes to it take effect on the next run.
+    Copy-Item -Path (Join-Path $PSScriptRoot 'ExcludeNonUserFolders.xml') `
+              -Destination 'C:\USMT\amd64\ExcludeNonUserFolders.xml' -ToSession $session -Force
     #endregion
 
     #region Run ScanState locally on GC0
@@ -127,6 +140,7 @@ try {
                 /i:MigDocs.xml `
                 /i:MigApp.xml `
                 /i:MigAppData.xml `
+                /i:ExcludeNonUserFolders.xml `
                 /v:13 `
                 /localonly `
                 /listfiles:"$ListFilePath" `

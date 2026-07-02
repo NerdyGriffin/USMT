@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Excludes reinstallable, non-user-state folders that live at the root of C:
+  on GC0 so they are not swept into the migration store by MigDocs.xml's
+  whole-drive document heuristic (which scans everything outside %ProgramFiles%).
+
+  These are game installs and reinstallable tooling, not user state:
+    C:\GOG Games   - GOG game library (~4,700 files)
+    C:\XboxGames   - Xbox game installs
+    C:\Python313   - Python runtime
+    C:\Portable    - portable apps
+    C:\tools       - misc tooling
+
+  Pattern form "<path>\* [*]" excludes all files in the folder and every
+  subfolder recursively. Passed to scanstate/loadstate via /i:ExcludeNonUserFolders.xml.
+-->
+<migration urlid="http://www.microsoft.com/migration/1.0/migxmlext/exclude_non_user_folders">
+  <component type="Documents" context="System">
+    <displayName>Exclude non-user-state C: folders</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <pattern type="File">C:\GOG Games\* [*]</pattern>
+            <pattern type="File">C:\XboxGames\* [*]</pattern>
+            <pattern type="File">C:\Python313\* [*]</pattern>
+            <pattern type="File">C:\Portable\* [*]</pattern>
+            <pattern type="File">C:\tools\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+</migration>
