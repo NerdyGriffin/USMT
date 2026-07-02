@@ -4,7 +4,7 @@ if (-not(Test-Path "$LocalUSMTPath")) {
 	New-Item -Path "$LocalUSMTPath" -ItemType Directory
 }
 
-$global:RemoteUSMTPath = '\\files.nerdygriffin.net\programfiles\USMT'
+$global:RemoteUSMTPath = '\\files.ad.nerdygriffin.net\it\programfiles\USMT'
 
 $global:MigStorePath = (Join-Path (Join-Path $RemoteUSMTPath "MigStore") $env:COMPUTERNAME)
 if (-not(Test-Path "$MigStorePath")) {
