@@ -5,16 +5,21 @@
 
 .DESCRIPTION
     Remotely invokes USMT ScanState on GC0 via PowerShell Remoting. All local user
-    profiles are captured in a single ScanState pass. USMT binaries are copied from
-    the network share to C:\USMT on GC0 if not already present.
+    profiles are captured in a single ScanState pass.
+
+    To avoid the Kerberos double-hop problem (GC0 cannot forward credentials to the
+    file server), this script:
+      1. Opens a persistent PSSession to GC0
+      2. Pushes USMT binaries from the admin workstation to C:\USMT on GC0
+      3. Runs ScanState on GC0, writing the store to a local path (C:\USMT\MigStore\)
+      4. Pulls the completed store back to the network MigStore via Copy-Item -FromSession
 
     The resulting migration store is written to:
-        \\files.ad.nerdygriffin.net\it\programfiles\USMT\MigStore\GC0\
+        \\HL-DC30\IT\USMT\MigStore\GC0\
 
     Prerequisites:
     - WinRM / PSRemoting must be enabled on GC0
     - The account running this script must have local admin rights on GC0
-    - GC0 must be able to reach \\files.ad.nerdygriffin.net\it\ over SMB
 
 .PARAMETER Credential
     Credentials for the PSRemoting session on GC0. If omitted the current user's
@@ -49,60 +54,74 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ComputerName   = 'GC0'
-$RemoteUSMTPath = '\\files.ad.nerdygriffin.net\it\programfiles\USMT'
-$MigStorePath   = Join-Path (Join-Path $RemoteUSMTPath 'MigStore') $ComputerName
+$ComputerName        = 'GC0'
+$RemoteUSMTPath      = '\\HL-DC30\IT\USMT'
+$NetworkMigStorePath = Join-Path (Join-Path $RemoteUSMTPath 'MigStore') $ComputerName
+$LocalBinSource      = Join-Path $PSScriptRoot '..\amd64'
 
 #region Ensure MigStore directory exists on the file server
-if (-not (Test-Path $MigStorePath)) {
-    Write-Verbose "Creating MigStore directory: $MigStorePath"
-    New-Item -Path $MigStorePath -ItemType Directory | Out-Null
+if (-not (Test-Path $NetworkMigStorePath)) {
+    Write-Verbose "Creating MigStore directory: $NetworkMigStorePath"
+    New-Item -Path $NetworkMigStorePath -ItemType Directory | Out-Null
 }
 #endregion
 
-#region Build Invoke-Command parameters
-$invokeParams = @{
-    ComputerName = $ComputerName
-    ScriptBlock  = {
-        param(
-            [string]$RemoteUSMTPath,
-            [string]$MigStorePath
-        )
+if (-not $PSCmdlet.ShouldProcess($ComputerName, 'Run USMT ScanState for all user profiles')) {
+    return
+}
+
+#region Open PSSession
+Write-Host "Connecting to $ComputerName via PSRemoting..."
+$sessionParams = @{ ComputerName = $ComputerName }
+if ($PSBoundParameters.ContainsKey('Credential')) {
+    $sessionParams.Credential = $Credential
+}
+$session = New-PSSession @sessionParams
+#endregion
+
+try {
+    #region Push USMT binaries to GC0
+    $hasBinaries = Invoke-Command -Session $session -ScriptBlock {
+        Test-Path 'C:\USMT\amd64\scanstate.exe'
+    }
+
+    if (-not $hasBinaries) {
+        Write-Host "Copying USMT binaries to $ComputerName..."
+        Invoke-Command -Session $session -ScriptBlock {
+            if (-not (Test-Path 'C:\USMT')) {
+                New-Item -Path 'C:\USMT' -ItemType Directory | Out-Null
+            }
+        }
+        Copy-Item -Path $LocalBinSource -Destination 'C:\USMT\amd64' -ToSession $session -Recurse -Force
+    } else {
+        Write-Host "USMT binaries already present on $ComputerName."
+    }
+    #endregion
+
+    #region Run ScanState locally on GC0
+    $localMigStore = 'C:\USMT\MigStore'
+
+    Invoke-Command -Session $session -ScriptBlock {
+        param([string]$LocalMigStore)
 
         Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
 
-        $LocalUSMTPath       = 'C:\USMT'
-        $LocalExecutablePath = Join-Path $LocalUSMTPath 'amd64'
-
-        #region Copy USMT binaries if not present on GC0
-        if (-not (Test-Path (Join-Path $LocalExecutablePath 'scanstate.exe'))) {
-            Write-Host "Copying USMT binaries to $env:COMPUTERNAME..."
-            if (-not (Test-Path $LocalUSMTPath)) {
-                New-Item -Path $LocalUSMTPath -ItemType Directory | Out-Null
-            }
-            Copy-Item -Path (Join-Path $RemoteUSMTPath 'amd64') `
-                      -Destination $LocalUSMTPath -Force -Recurse
+        if (-not (Test-Path $LocalMigStore)) {
+            New-Item -Path $LocalMigStore -ItemType Directory | Out-Null
         }
-        #endregion
 
-        #region Ensure per-computer MigStore directory is accessible from GC0
-        if (-not (Test-Path $MigStorePath)) {
-            New-Item -Path $MigStorePath -ItemType Directory | Out-Null
-        }
-        #endregion
-
-        $LogFilePath  = Join-Path $MigStorePath 'scan_all.log'
-        $ProgFilePath = Join-Path $MigStorePath 'prog_all.log'
-        $ListFilePath = Join-Path $MigStorePath 'list_all.log'
+        $LogFilePath  = Join-Path $LocalMigStore 'scan_all.log'
+        $ProgFilePath = Join-Path $LocalMigStore 'prog_all.log'
+        $ListFilePath = Join-Path $LocalMigStore 'list_all.log'
 
         Write-Host "Starting ScanState on $env:COMPUTERNAME (all user profiles)..."
-        Write-Host "  MigStore : $MigStorePath"
+        Write-Host "  MigStore : $LocalMigStore"
         Write-Host "  Log      : $LogFilePath"
 
-        Push-Location $LocalExecutablePath
+        Push-Location 'C:\USMT\amd64'
         try {
-            .\scanstate.exe "$MigStorePath" `
+            .\scanstate.exe "$LocalMigStore" `
                 /o `
                 /vsc `
                 /i:MigDocs.xml `
@@ -123,19 +142,14 @@ $invokeParams = @{
         } finally {
             Pop-Location
         }
-    }
-    ArgumentList = $RemoteUSMTPath, $MigStorePath
-}
+    } -ArgumentList $localMigStore
+    #endregion
 
-if ($PSBoundParameters.ContainsKey('Credential')) {
-    $invokeParams.Credential = $Credential
+    #region Pull MigStore back to network share
+    Write-Host "Copying MigStore from $ComputerName to $NetworkMigStorePath..."
+    Copy-Item -Path $localMigStore -Destination $NetworkMigStorePath -FromSession $session -Recurse -Force
+    Write-Host "Backup complete. MigStore location: $NetworkMigStorePath"
+    #endregion
+} finally {
+    Remove-PSSession $session
 }
-#endregion
-
-#region Run ScanState on GC0
-if ($PSCmdlet.ShouldProcess($ComputerName, 'Run USMT ScanState for all user profiles')) {
-    Write-Host "Connecting to $ComputerName via PSRemoting..."
-    Invoke-Command @invokeParams
-    Write-Host "Backup complete. MigStore location: $MigStorePath"
-}
-#endregion
