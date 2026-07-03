@@ -13,7 +13,7 @@ if (-not(Test-Path "$MigStorePath")) {
 }
 
 $global:LocalExecutablePath = (Join-Path $LocalUSMTPath 'amd64')
-if (-not((Test-Path "$LocalExecutablePath\loadstate.exe") -and (Test-Path "$LocalExecutablePath\savestate.exe"))) {
+if (-not((Test-Path "$LocalExecutablePath\loadstate.exe") -and (Test-Path "$LocalExecutablePath\scanstate.exe"))) {
 	$RemoteExecutablePath = (Join-Path $RemoteUSMTPath 'amd64')
 	Write-Host "Copying '$RemoteExecutablePath' to '$LocalExecutablePath'"
 	Copy-Item -Path "$RemoteExecutablePath" -Destination "$LocalUSMTPath" -Force -Recurse

@@ -120,7 +120,7 @@ try {
     #region Run ScanState locally on GC0
     $localMigStore = 'C:\USMT\MigStore'
 
-    Invoke-Command -Session $session -ScriptBlock {
+    $scanExit = Invoke-Command -Session $session -ScriptBlock {
         param([string]$LocalMigStore)
 
         Set-StrictMode -Version Latest
@@ -140,6 +140,10 @@ try {
 
         Push-Location 'C:\USMT\amd64'
         try {
+            # Pipe to Out-Host so scanstate's console output streams to the caller
+            # without polluting this script block's output (only the exit code below
+            # is returned). /c already absorbs non-fatal errors, so a non-zero exit
+            # here is a fatal ScanState failure.
             .\scanstate.exe "$LocalMigStore" `
                 /o `
                 /vsc `
@@ -152,17 +156,25 @@ try {
                 /listfiles:"$ListFilePath" `
                 /l:"$LogFilePath" `
                 /progress:"$ProgFilePath" `
-                /c
+                /c | Out-Host
 
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "scanstate.exe exited with code $LASTEXITCODE. Review: $LogFilePath"
+            $scanCode = $LASTEXITCODE
+            if ($scanCode -ne 0) {
+                Write-Warning "scanstate.exe exited with code $scanCode. Review: $LogFilePath"
             } else {
                 Write-Host "ScanState completed successfully."
             }
+            $scanCode
         } finally {
             Pop-Location
         }
     } -ArgumentList $localMigStore
+
+    # Gate the outbound copy on a successful capture: never publish a failed or
+    # partial store over the previous good one.
+    if ($scanExit -ne 0) {
+        throw "ScanState on $ComputerName failed (exit $scanExit); aborting before copying the store to $NetworkMigStorePath. Review scan_all.log under $localMigStore on $ComputerName."
+    }
     #endregion
 
     #region Push MigStore from GC0 to the network share (GC0-side push via RBCD)

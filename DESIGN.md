@@ -10,7 +10,10 @@ handoff artifact for implementation.
   repo, run one setup script, answer a few prompts, and start backing up / restoring
   user state.
 - **Config-driven with inline override.** Behavior comes from PSD1 config files;
-  any script parameter overrides its config value for that run.
+  any script parameter overrides its config value for that run. Scalar keys
+  *replace* on override; keys documented as additive list settings (e.g.
+  `ExcludeRules` extending `DefaultExcludeRules`) *merge* with the inherited
+  value rather than replacing it.
 - **Local-first, remote-capable.** Every operation runs against the local machine by
   default; supplying a computer name activates the remote (PSRemoting) path.
 - **Domain-agnostic and self-contained.** No dependency on any private repo or
@@ -27,7 +30,7 @@ handoff artifact for implementation.
 
 ## Repository layout
 
-```
+```text
 USMT/
   Setup.ps1                       # acquire amd64 binaries + interactive config creation
   Backup-UserState.ps1            # scanstate pipeline (local or -SourceComputer)
@@ -60,8 +63,10 @@ Naming follows PowerShell conventions: `Modules/` (not `lib/`), approved verbs
 ## Configuration
 
 Two tiers of PSD1 files. **Resolution order: command-line parameter > job config >
-global config > built-in default.** `Setup.ps1` creates the global file; job files are
-optional (all job settings can be given as parameters).
+global config > built-in default.** This replacement order governs scalar keys;
+additive list keys (`DefaultExcludeRules` → `ExcludeRules`) merge across tiers
+instead of a higher tier replacing a lower one. `Setup.ps1` creates the global
+file; job files are optional (all job settings can be given as parameters).
 
 PSD1 chosen over JSON: idiomatic for a pure-PowerShell public tool, supports comments,
 parses natively on 5.1 (`Import-PowerShellDataFile`).
@@ -77,7 +82,7 @@ parses natively on 5.1 (`Import-PowerShellDataFile`).
 | `LogRoot` | transcript/log directory | `<repo>\Logs` |
 | `RemoteStagingPath` | working dir created on remote machines | `C:\USMT` |
 | `TransferMethod` | `Auto`, `AdminShare`, `SessionPushPull` | `Auto` |
-| `DefaultExcludeRules` | exclude-rule XML names always applied | `@()` |
+| `DefaultExcludeRules` | exclude-rule XML names always applied (merged with each job's `ExcludeRules`) | `@()` |
 | `Verbosity` | scanstate/loadstate `/v` level | `13` |
 
 ### Per-job — `Config/<name>.Migration.psd1`
@@ -160,7 +165,7 @@ the options neutrally.
 2. **Interactive config.** If `Config\Settings.psd1` exists: `"Existing config
    detected. Reconfigure? (y/N)"`. During prompting, print one explainer line first —
    `"Press Enter to accept the value shown in parentheses."` — then each prompt uses
-   the CLI-standard form `Prompt text (current_or_default_value): `. Blank-able keys
+   the CLI-standard form `Prompt text (current_or_default_value):`. Blank-able keys
    (e.g. `MigStoreNetworkPath`) accept empty to skip the feature. Writes
    `Config\Settings.psd1` (gitignored).
 3. **Idempotent.** Re-runnable at any time; only fills gaps unless the user opts to
