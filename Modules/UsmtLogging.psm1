@@ -93,7 +93,8 @@ function Stop-UsmtLog {
         try {
             Stop-Transcript | Out-Null
         } catch {
-            # No active transcript - nothing to do.
+            # No active transcript (or transcription disabled) - nothing to do.
+            Write-Verbose "Stop-UsmtLog: no active transcript to stop."
         }
         $script:UsmtTranscriptPath = $null
     }
