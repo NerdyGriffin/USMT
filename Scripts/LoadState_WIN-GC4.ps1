@@ -10,19 +10,22 @@
     is performed (/mu, /md) - source and target accounts are the same domain users,
     so USMT restores each profile back onto its matching domain account by SID.
 
-    All file transfers go through the target's C$ admin share via robocopy (not
-    Copy-Item -ToSession / -FromSession, which trips a PowerShell bug - "the
-    property 'Length' cannot be found" - on large store trees). Each copy is a
-    single SMB hop from the caller to each side, so it does not depend on Kerberos
-    delegation for WIN-GC4, and it sidesteps the double-hop problem of running
-    loadstate directly against the file server. The caller already needs admin on
-    WIN-GC4 for PSRemoting, so its C$ share is reachable. The script:
+    The large store transfer is done with robocopy run ON WIN-GC4 (inside the
+    PSSession), not Copy-Item -ToSession / -FromSession (which trips a PowerShell
+    bug - "the property 'Length' cannot be found" - on large store trees) and not a
+    caller-side \\WIN-GC4\C$ copy (WIN-GC4 blocks inbound SMB, so its C$ share is
+    unreachable from the caller - same as the source machine). WIN-GC4 reaches the
+    file share via the RBCD delegation configured for it. The script:
       1. Opens a persistent PSSession to WIN-GC4
       2. Pushes USMT binaries from the admin workstation to C:\USMT on WIN-GC4
       3. Robocopies the captured MigStore from the network share to a local path on
-         WIN-GC4 (C:\USMT\MigStore\<SourceComputerName>) via its C$ admin share
+         WIN-GC4 (C:\USMT\MigStore\<SourceComputerName>) - robocopy is run ON WIN-GC4
+         (target-side pull) because WIN-GC4 blocks inbound SMB, so its C$ share is
+         unreachable from the caller; the inbound pull works via WIN-GC4's RBCD
+         delegation to the file server
       4. Runs LoadState on WIN-GC4 against the local copy of the store
       5. Robocopies the resulting load logs back to the network MigStore folder
+         (also run on WIN-GC4, outbound via RBCD)
 
     The migration store is read from:
         \\HL-DC30\IT\USMT\MigStore\<SourceComputerName>\
@@ -115,9 +118,8 @@ try {
     }
     #endregion
 
-    #region Push the migration store to target
-    $localMigStore    = Join-Path 'C:\USMT\MigStore' $SourceComputerName
-    $targetShareStore = "\\$TargetComputerName\C`$\USMT\MigStore\$SourceComputerName"
+    #region Pull the migration store to target (target-side pull via RBCD)
+    $localMigStore = Join-Path 'C:\USMT\MigStore' $SourceComputerName
 
     $hasStore = Invoke-Command -Session $session -ScriptBlock {
         param([string]$LocalMigStore)
@@ -125,13 +127,24 @@ try {
     } -ArgumentList $localMigStore
 
     if (-not $hasStore) {
-        # Push via the target's C$ admin share with robocopy (resumable; avoids the
-        # Copy-Item -ToSession bug and is far faster for a multi-hundred-GB store).
-        # robocopy creates the destination path as needed.
-        Write-Host "Copying MigStore from $NetworkMigStorePath to $targetShareStore..."
-        robocopy $NetworkMigStorePath $targetShareStore /E /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
-        if ($LASTEXITCODE -ge 8) {
-            throw "robocopy failed copying MigStore to $targetShareStore (exit $LASTEXITCODE)."
+        # Run robocopy ON the target (inside the PSSession) pulling the store INBOUND
+        # from the file share to a local path, rather than pushing from the caller to
+        # the target's C$ admin share. The target blocks inbound SMB (same as the
+        # source machine), so \\<target>\C$ is unreachable from the caller; and
+        # Copy-Item -ToSession trips a PowerShell bug on large store trees. The
+        # target's inbound reach to the file share works via the RBCD delegation
+        # configured for it (see Staging/NETLOGON/Config/KerberosDelegation.json).
+        Write-Host "Copying MigStore from $NetworkMigStorePath to $TargetComputerName (target-side pull)..."
+        $copyExit = Invoke-Command -Session $session -ScriptBlock {
+            param([string]$NetworkMigStorePath, [string]$LocalMigStore)
+            if (-not (Test-Path $LocalMigStore)) {
+                New-Item -Path $LocalMigStore -ItemType Directory -Force | Out-Null
+            }
+            robocopy $NetworkMigStorePath $LocalMigStore /E /R:2 /W:5 /NP /NFL /NDL | Out-Host
+            $LASTEXITCODE
+        } -ArgumentList $NetworkMigStorePath, $localMigStore
+        if ($copyExit -ge 8) {
+            throw "robocopy (on $TargetComputerName) failed copying MigStore from $NetworkMigStorePath (exit $copyExit)."
         }
     } else {
         Write-Host "MigStore already present on $TargetComputerName."
@@ -176,12 +189,17 @@ try {
     } -ArgumentList $localMigStore
     #endregion
 
-    #region Pull load logs back to network MigStore for record-keeping
-    # Pull just the load logs back via the C$ admin share (robocopy with a file filter).
-    Write-Host "Copying load logs from $targetShareStore to $NetworkMigStorePath..."
-    robocopy $targetShareStore $NetworkMigStorePath load_all.log prog_load_all.log /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
-    if ($LASTEXITCODE -ge 8) {
-        Write-Warning "robocopy failed pulling load logs back to $NetworkMigStorePath (exit $LASTEXITCODE)."
+    #region Push load logs back to network MigStore for record-keeping (target-side push)
+    # Run robocopy ON the target pushing the load logs OUTBOUND to the file share
+    # (via RBCD), mirroring the store pull. Same reason: the target blocks inbound SMB.
+    Write-Host "Copying load logs from $TargetComputerName to $NetworkMigStorePath..."
+    $logExit = Invoke-Command -Session $session -ScriptBlock {
+        param([string]$LocalMigStore, [string]$NetworkMigStorePath)
+        robocopy $LocalMigStore $NetworkMigStorePath load_all.log prog_load_all.log /R:2 /W:5 /NP /NFL /NDL | Out-Host
+        $LASTEXITCODE
+    } -ArgumentList $localMigStore, $NetworkMigStorePath
+    if ($logExit -ge 8) {
+        Write-Warning "robocopy (on $TargetComputerName) failed pushing load logs to $NetworkMigStorePath (exit $logExit)."
     }
     Write-Host "Restore complete. Reboot $TargetComputerName for all settings to take effect."
     #endregion
