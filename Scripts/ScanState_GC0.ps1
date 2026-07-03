@@ -12,7 +12,9 @@
       1. Opens a persistent PSSession to GC0
       2. Pushes USMT binaries from the admin workstation to C:\USMT on GC0
       3. Runs ScanState on GC0, writing the store to a local path (C:\USMT\MigStore\)
-      4. Pulls the completed store back to the network MigStore via Copy-Item -FromSession
+      4. Pulls the completed store back to the network MigStore via robocopy over
+         GC0's C$ admin share (resumable; avoids a Copy-Item -FromSession bug on
+         large store trees)
 
     The resulting migration store is written to:
         \\HL-DC30\IT\USMT\MigStore\GC0\
@@ -163,8 +165,18 @@ try {
     #endregion
 
     #region Pull MigStore back to network share
-    Write-Host "Copying MigStore from $ComputerName to $NetworkMigStorePath..."
-    Copy-Item -Path $localMigStore -Destination $NetworkMigStorePath -FromSession $session -Recurse -Force
+    # Copy via GC0's C$ admin share with robocopy rather than Copy-Item -FromSession:
+    # -FromSession -Recurse trips a PowerShell bug ("property 'Length' cannot be
+    # found") on large store trees, and robocopy is resumable and far faster for a
+    # multi-hundred-GB store. This runs as a single SMB hop from the caller to each
+    # side (the caller already needs admin on GC0 for PSRemoting, so C$ is reachable).
+    $adminShareStore = "\\$ComputerName\C`$\USMT\MigStore"
+    Write-Host "Copying MigStore from $adminShareStore to $NetworkMigStorePath..."
+    robocopy $adminShareStore $NetworkMigStorePath /E /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
+    # robocopy exit codes < 8 indicate success (files copied / nothing to do).
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy failed copying MigStore to $NetworkMigStorePath (exit $LASTEXITCODE)."
+    }
     Write-Host "Backup complete. MigStore location: $NetworkMigStorePath"
     #endregion
 } finally {
