@@ -492,7 +492,9 @@ $script:UsmtScanStateScript = {
     Write-Host "Running scanstate on $env:COMPUTERNAME -> $StorePath"
     Push-Location $BinPath
     try {
-        & $exe @a
+        # Pipe the native output to the host so it is shown/transcribed but does
+        # NOT pollute the return value - only the exit code must flow back.
+        & $exe @a | Out-Host
         return $LASTEXITCODE
     } finally {
         Pop-Location
@@ -527,7 +529,9 @@ $script:UsmtLoadStateScript = {
     Write-Host "Running loadstate on $env:COMPUTERNAME <- $StorePath"
     Push-Location $BinPath
     try {
-        & $exe @a
+        # Pipe the native output to the host so it is shown/transcribed but does
+        # NOT pollute the return value - only the exit code must flow back.
+        & $exe @a | Out-Host
         return $LASTEXITCODE
     } finally {
         Pop-Location

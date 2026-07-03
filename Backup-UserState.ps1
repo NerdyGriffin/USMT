@@ -223,13 +223,14 @@ try {
             -Verbosity $config.Verbosity -IncludeUser $includeUser `
             -SkipStaleProfileDays $config.SkipStaleProfileDays
 
-        if ($scanExit -ne 0) {
-            Write-Log "scanstate exited with code $scanExit; review scan_all.log beside the store." 'WARN'
-        } else {
+        if ($scanExit -eq 0) {
             Write-Log "scanstate completed successfully." 'SUCCESS'
+        } else {
+            Write-Log "scanstate returned exit code $scanExit; transferring logs for diagnosis, then failing." 'ERROR'
         }
 
         # Transfer the store to its durable location (skipped when work == store).
+        # Done even on scanstate failure so the logs come back for diagnosis.
         if ($session -or ($workPath -ne $storePath)) {
             Write-Log "Transferring store to $storePath ..." 'INFO'
             $rc = Copy-MigStore -Direction 'Upload' -Session $session -ComputerName $sourceComputer `
@@ -238,6 +239,12 @@ try {
                 throw "robocopy failed (exit $rc) copying the store to '$storePath'."
             }
             Write-Log "Store transfer complete." 'SUCCESS'
+        }
+
+        # A non-zero USMT code means no usable store was produced (with /c,
+        # non-fatal errors are absorbed and scanstate still returns 0).
+        if ($scanExit -ne 0) {
+            throw "scanstate returned exit code $scanExit on '$subjectLabel'; no usable store was produced. Review scan_all.log in $storePath."
         }
 
         Write-Log "Backup complete. Store: $storePath" 'SUCCESS'

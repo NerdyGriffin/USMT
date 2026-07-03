@@ -218,13 +218,14 @@ try {
         $loadExit = Invoke-UsmtLoadState -Session $session -BinPath $staged.BinPath `
             -StorePath $workPath -Verbosity $config.Verbosity -IncludeUser $includeUser
 
-        if ($loadExit -ne 0) {
-            Write-Log "loadstate exited with code $loadExit; review load_all.log beside the store." 'WARN'
-        } else {
+        if ($loadExit -eq 0) {
             Write-Log "loadstate completed successfully." 'SUCCESS'
+        } else {
+            Write-Log "loadstate returned exit code $loadExit; pushing logs for diagnosis, then failing." 'ERROR'
         }
 
-        # Push load logs back to the durable store for record-keeping (non-fatal).
+        # Push load logs back to the durable store for record-keeping (non-fatal),
+        # done even on failure so the logs are available for diagnosis.
         if ($session -or ($workPath -ne $storePath)) {
             Write-Log "Pushing load logs back to $storePath ..." 'INFO'
             $logRc = Copy-MigStore -Direction 'Upload' -Session $session -ComputerName $targetComputer `
@@ -233,6 +234,11 @@ try {
             if (-not (Test-UsmtRobocopyOk -ExitCode $logRc)) {
                 Write-Log "robocopy failed (exit $logRc) pushing load logs; the restore itself is unaffected." 'WARN'
             }
+        }
+
+        # A non-zero USMT code means the restore did not complete cleanly.
+        if ($loadExit -ne 0) {
+            throw "loadstate returned exit code $loadExit on '$subjectLabel'; review load_all.log in $storePath."
         }
 
         Write-Log "Restore complete. Reboot '$subjectLabel' for all settings to take effect." 'SUCCESS'

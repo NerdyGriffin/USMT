@@ -111,9 +111,10 @@ function Write-Log {
 
     .DESCRIPTION
         Emits '<ISO-8601 timestamp> [LEVEL] <message>'. The message is written to
-        the console (and thus captured by any active transcript). INFO and SUCCESS
-        use Write-Host; WARN uses Write-Warning; ERROR uses Write-Error
-        (non-terminating).
+        the console (and thus captured by any active transcript). INFO/SUCCESS/ERROR
+        use Write-Host (ERROR in red); WARN uses Write-Warning. Write-Log only
+        reports - it never alters control flow, so an ERROR line cannot terminate
+        the caller (that is the job of an explicit throw).
 
     .PARAMETER Message
         The text to log.
@@ -136,10 +137,10 @@ function Write-Log {
     $line      = "$timestamp [$Level] $Message"
 
     switch ($Level) {
-        'WARN'  { Write-Warning $line }
-        'ERROR' { Write-Error $line }
+        'WARN'    { Write-Warning $line }
+        'ERROR'   { Write-Host $line -ForegroundColor Red }
         'SUCCESS' { Write-Host $line -ForegroundColor Green }
-        default { Write-Host $line }
+        default   { Write-Host $line }
     }
 }
 
