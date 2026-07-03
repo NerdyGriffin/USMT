@@ -10,16 +10,19 @@
     is performed (/mu, /md) - source and target accounts are the same domain users,
     so USMT restores each profile back onto its matching domain account by SID.
 
-    To avoid the Kerberos double-hop problem (WIN-GC4 cannot forward credentials to
-    the file server - it is also outside the Workstations OU covered by the RBCD
-    delegation config, see Staging/NETLOGON/Config/KerberosDelegation.json), this
-    script:
+    All file transfers go through the target's C$ admin share via robocopy (not
+    Copy-Item -ToSession / -FromSession, which trips a PowerShell bug - "the
+    property 'Length' cannot be found" - on large store trees). Each copy is a
+    single SMB hop from the caller to each side, so it does not depend on Kerberos
+    delegation for WIN-GC4, and it sidesteps the double-hop problem of running
+    loadstate directly against the file server. The caller already needs admin on
+    WIN-GC4 for PSRemoting, so its C$ share is reachable. The script:
       1. Opens a persistent PSSession to WIN-GC4
       2. Pushes USMT binaries from the admin workstation to C:\USMT on WIN-GC4
-      3. Pushes the captured MigStore from the network share to a local path on
-         WIN-GC4 (C:\USMT\MigStore\<SourceComputerName>)
+      3. Robocopies the captured MigStore from the network share to a local path on
+         WIN-GC4 (C:\USMT\MigStore\<SourceComputerName>) via its C$ admin share
       4. Runs LoadState on WIN-GC4 against the local copy of the store
-      5. Pulls the resulting load logs back to the network MigStore folder
+      5. Robocopies the resulting load logs back to the network MigStore folder
 
     The migration store is read from:
         \\HL-DC30\IT\USMT\MigStore\<SourceComputerName>\
@@ -113,7 +116,8 @@ try {
     #endregion
 
     #region Push the migration store to target
-    $localMigStore = Join-Path 'C:\USMT\MigStore' $SourceComputerName
+    $localMigStore    = Join-Path 'C:\USMT\MigStore' $SourceComputerName
+    $targetShareStore = "\\$TargetComputerName\C`$\USMT\MigStore\$SourceComputerName"
 
     $hasStore = Invoke-Command -Session $session -ScriptBlock {
         param([string]$LocalMigStore)
@@ -121,13 +125,14 @@ try {
     } -ArgumentList $localMigStore
 
     if (-not $hasStore) {
-        Write-Host "Copying MigStore from $NetworkMigStorePath to $TargetComputerName..."
-        Invoke-Command -Session $session -ScriptBlock {
-            if (-not (Test-Path 'C:\USMT\MigStore')) {
-                New-Item -Path 'C:\USMT\MigStore' -ItemType Directory | Out-Null
-            }
+        # Push via the target's C$ admin share with robocopy (resumable; avoids the
+        # Copy-Item -ToSession bug and is far faster for a multi-hundred-GB store).
+        # robocopy creates the destination path as needed.
+        Write-Host "Copying MigStore from $NetworkMigStorePath to $targetShareStore..."
+        robocopy $NetworkMigStorePath $targetShareStore /E /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
+        if ($LASTEXITCODE -ge 8) {
+            throw "robocopy failed copying MigStore to $targetShareStore (exit $LASTEXITCODE)."
         }
-        Copy-Item -Path $NetworkMigStorePath -Destination 'C:\USMT\MigStore' -ToSession $session -Recurse -Force
     } else {
         Write-Host "MigStore already present on $TargetComputerName."
     }
@@ -172,9 +177,12 @@ try {
     #endregion
 
     #region Pull load logs back to network MigStore for record-keeping
-    Write-Host "Copying load logs from $TargetComputerName to $NetworkMigStorePath..."
-    Copy-Item -Path (Join-Path $localMigStore 'load_all.log') -Destination $NetworkMigStorePath -FromSession $session -Force
-    Copy-Item -Path (Join-Path $localMigStore 'prog_load_all.log') -Destination $NetworkMigStorePath -FromSession $session -Force
+    # Pull just the load logs back via the C$ admin share (robocopy with a file filter).
+    Write-Host "Copying load logs from $targetShareStore to $NetworkMigStorePath..."
+    robocopy $targetShareStore $NetworkMigStorePath load_all.log prog_load_all.log /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
+    if ($LASTEXITCODE -ge 8) {
+        Write-Warning "robocopy failed pulling load logs back to $NetworkMigStorePath (exit $LASTEXITCODE)."
+    }
     Write-Host "Restore complete. Reboot $TargetComputerName for all settings to take effect."
     #endregion
 } finally {
