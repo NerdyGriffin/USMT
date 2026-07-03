@@ -1,4 +1,6 @@
+*.ffs_db
 *.ffs_lock
+amd64
 MigStore
 Windows ADK Installers
-amd64
+SyncUSMT.ffs_gui

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Excludes large, re-downloadable / regenerable content from the GC0 capture.
+  None of this is irreplaceable user state: game libraries re-fetch on demand,
+  Nextcloud re-syncs from the server, and caches/temp regenerate automatically.
+  Keeping them would bloat the migration store (they accounted for ~678 GB of an
+  872 GB first-pass capture).
+
+  Two components are used because the pattern syntax differs by scope:
+
+  * Per-user folders MUST use CSIDL variables in a "User" context component so
+    the rule expands once per profile. A literal "C:\Users\*\..." path does NOT
+    work - USMT does not treat a bare "*" path segment as "any user", so an
+    earlier attempt with that form excluded nothing and the store came back at
+    the full 872 GB. CSIDL is the documented per-user approach (see
+    learn.microsoft.com .../understanding-migration-xml-files).
+      %CSIDL_LOCAL_APPDATA% = C:\Users\<user>\AppData\Local
+      %CSIDL_PROFILE%       = C:\Users\<user>
+
+  * System-wide literal paths (game libraries at the C:\ root and under
+    %ProgramFiles%) use a "System" context component with literal paths.
+
+  Pattern form "<path>\* [*]" excludes the folder and every subfolder
+  recursively. unconditionalExclude takes precedence over any include rule.
+
+  === Excluded ===
+    Game libraries (system paths):
+      C:\GOG Games                                 GOG library (root)
+      C:\XboxGames                                 Xbox / MS Store games (root)
+      C:\Program Files\Epic Games                  (~177 GB; MigDocs skips it too)
+      C:\Program Files (x86)\GOG Galaxy\Games      (~165 GB; ditto)
+    Per-user (CSIDL):
+      %CSIDL_LOCAL_APPDATA%\Google\Play Games      Google Play Games (~512 GB)
+      %CSIDL_PROFILE%\Nextcloud                    sync folder (~126 GB)
+      %CSIDL_LOCAL_APPDATA%\Temp                   temp files
+      %CSIDL_LOCAL_APPDATA%\NVIDIA                 shader / driver cache (~27 GB)
+
+  === Kept ===
+    %CSIDL_PROFILE%\Downloads, C:\Python313, C:\Portable, C:\tools, and all real
+    profile/user state (Documents, Roaming settings, etc.).
+-->
+<migration urlid="http://www.microsoft.com/migration/1.0/migxmlext/exclude_bulk_data">
+
+  <!-- System-wide literal paths: game libraries at C:\ root and under Program Files -->
+  <component type="Documents" context="System">
+    <displayName>Exclude game libraries (system paths)</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <pattern type="File">C:\GOG Games\* [*]</pattern>
+            <pattern type="File">C:\XboxGames\* [*]</pattern>
+            <pattern type="File">C:\Program Files\Epic Games\* [*]</pattern>
+            <pattern type="File">C:\Program Files (x86)\GOG Galaxy\Games\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+
+  <!-- Per-user folders via CSIDL: runs once per profile (all users) -->
+  <component type="Documents" context="User">
+    <displayName>Exclude bulk per-user content</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Google\Play Games\* [*]</pattern>
+            <pattern type="File">%CSIDL_PROFILE%\Nextcloud\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Temp\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\NVIDIA\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+
+</migration>
