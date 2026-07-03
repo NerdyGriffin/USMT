@@ -42,15 +42,17 @@
     - /localonly                    : local profiles only, no roaming data
     - /vsc                          : Volume Shadow Copy for files locked by running processes
     - /c                            : continue on non-fatal errors
-    - /i:ExcludeGameLibraries.xml   : skips video game libraries (GOG, Xbox, Epic,
-                                      GOG Galaxy) - large, purely re-downloadable
-                                      content that MigDocs.xml would otherwise sweep
-                                      in from C:\ root. Small tooling (Python,
-                                      portable apps, tools) is intentionally kept.
+    - /i:ExcludeBulkData.xml        : skips large re-downloadable / regenerable
+                                      content - game libraries (GOG, Xbox, Epic,
+                                      GOG Galaxy, Google Play Games), the Nextcloud
+                                      sync folder, and Temp/NVIDIA caches. Downloads
+                                      and small tooling (Python, portable apps) are
+                                      intentionally kept. See the XML for the full
+                                      list and rationale.
 
     Note: GC0's secondary Windows disk (D:) and Bazzite btrfs disk (E:) were
     physically removed before capture, so /localonly sees only the C: system
-    volume. The exclude XML handles the game libraries that live on C: itself.
+    volume. The exclude XML handles the bulk content that lives on C: itself.
 
     To restrict capture to specific users, pass /ui and /ue filters to scanstate
     (see USMT documentation for syntax).
@@ -108,8 +110,8 @@ try {
 
     # Always push the custom exclude rule fresh, even when binaries are cached,
     # so script-tracked changes to it take effect on the next run.
-    Copy-Item -Path (Join-Path $PSScriptRoot 'ExcludeGameLibraries.xml') `
-              -Destination 'C:\USMT\amd64\ExcludeGameLibraries.xml' -ToSession $session -Force
+    Copy-Item -Path (Join-Path $PSScriptRoot 'ExcludeBulkData.xml') `
+              -Destination 'C:\USMT\amd64\ExcludeBulkData.xml' -ToSession $session -Force
     #endregion
 
     #region Run ScanState locally on GC0
@@ -141,7 +143,7 @@ try {
                 /i:MigDocs.xml `
                 /i:MigApp.xml `
                 /i:MigAppData.xml `
-                /i:ExcludeGameLibraries.xml `
+                /i:ExcludeBulkData.xml `
                 /v:13 `
                 /localonly `
                 /listfiles:"$ListFilePath" `

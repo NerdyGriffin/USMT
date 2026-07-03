@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Excludes large, re-downloadable / regenerable content from the GC0 capture.
+  None of this is irreplaceable user state: game libraries re-fetch on demand,
+  Nextcloud re-syncs from the server, and caches/temp regenerate automatically.
+  Keeping them would bloat the migration store (they accounted for ~678 GB of an
+  872 GB first-pass capture).
+
+  Pattern form "<path>\* [*]" excludes all files in the folder and every
+  subfolder recursively. "C:\Users\*\..." applies the rule to every user
+  profile (the * matches a single directory level - USMT wildcards do not span
+  backslashes). unconditionalExclude takes precedence over any include rule.
+
+  --- Video game libraries ---
+    C:\GOG Games                                    GOG library (root)
+    C:\XboxGames                                    Xbox / MS Store games (root)
+    C:\Program Files\Epic Games                     (~177 GB; already skipped by
+                                                     MigDocs, excluded as insurance)
+    C:\Program Files (x86)\GOG Galaxy\Games         (~165 GB; ditto)
+    C:\Users\*\AppData\Local\Google\Play Games      Google Play Games platform
+                                                     (~512 GB on christian.kunis)
+
+  --- Cloud-sync folder (authoritative copy lives on the Nextcloud server) ---
+    C:\Users\*\Nextcloud                            (~126 GB on christian.kunis)
+
+  --- Caches / temp (regenerated automatically) ---
+    C:\Users\*\AppData\Local\Temp                   temp files
+    C:\Users\*\AppData\Local\NVIDIA                 shader / driver cache (~27 GB)
+
+  NOT excluded (kept): C:\Users\*\Downloads, C:\Python313, C:\Portable, C:\tools,
+  and all real profile/user state (Documents, Roaming settings, etc.).
+-->
+<migration urlid="http://www.microsoft.com/migration/1.0/migxmlext/exclude_bulk_data">
+  <component type="Documents" context="System">
+    <displayName>Exclude bulk re-downloadable / regenerable content</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <!-- Game libraries -->
+            <pattern type="File">C:\GOG Games\* [*]</pattern>
+            <pattern type="File">C:\XboxGames\* [*]</pattern>
+            <pattern type="File">C:\Program Files\Epic Games\* [*]</pattern>
+            <pattern type="File">C:\Program Files (x86)\GOG Galaxy\Games\* [*]</pattern>
+            <pattern type="File">C:\Users\*\AppData\Local\Google\Play Games\* [*]</pattern>
+            <!-- Cloud-sync folder (re-syncs from server) -->
+            <pattern type="File">C:\Users\*\Nextcloud\* [*]</pattern>
+            <!-- Caches / temp (regenerate automatically) -->
+            <pattern type="File">C:\Users\*\AppData\Local\Temp\* [*]</pattern>
+            <pattern type="File">C:\Users\*\AppData\Local\NVIDIA\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+</migration>
