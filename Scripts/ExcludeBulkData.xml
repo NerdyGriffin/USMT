@@ -11,7 +11,7 @@
   profile (the * matches a single directory level - USMT wildcards do not span
   backslashes). unconditionalExclude takes precedence over any include rule.
 
-  --- Video game libraries ---
+  === Video game libraries ===
     C:\GOG Games                                    GOG library (root)
     C:\XboxGames                                    Xbox / MS Store games (root)
     C:\Program Files\Epic Games                     (~177 GB; already skipped by
@@ -20,10 +20,10 @@
     C:\Users\*\AppData\Local\Google\Play Games      Google Play Games platform
                                                      (~512 GB on christian.kunis)
 
-  --- Cloud-sync folder (authoritative copy lives on the Nextcloud server) ---
+  === Cloud-sync folder (authoritative copy lives on the Nextcloud server) ===
     C:\Users\*\Nextcloud                            (~126 GB on christian.kunis)
 
-  --- Caches / temp (regenerated automatically) ---
+  === Caches / temp (regenerated automatically) ===
     C:\Users\*\AppData\Local\Temp                   temp files
     C:\Users\*\AppData\Local\NVIDIA                 shader / driver cache (~27 GB)
 
