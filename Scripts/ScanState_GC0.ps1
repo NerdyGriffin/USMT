@@ -12,9 +12,10 @@
       1. Opens a persistent PSSession to GC0
       2. Pushes USMT binaries from the admin workstation to C:\USMT on GC0
       3. Runs ScanState on GC0, writing the store to a local path (C:\USMT\MigStore\)
-      4. Pulls the completed store back to the network MigStore via robocopy over
-         GC0's C$ admin share (resumable; avoids a Copy-Item -FromSession bug on
-         large store trees)
+      4. Pushes the completed store OUTBOUND from GC0 to the network MigStore via
+         robocopy run on GC0 (uses the RBCD delegation for GC0 -> file server).
+         GC0 blocks inbound SMB, so pulling from its C$ share does not work; and
+         Copy-Item -FromSession trips a PowerShell bug on large store trees.
 
     The resulting migration store is written to:
         \\HL-DC30\IT\USMT\MigStore\GC0\
@@ -164,18 +165,27 @@ try {
     } -ArgumentList $localMigStore
     #endregion
 
-    #region Pull MigStore back to network share
-    # Copy via GC0's C$ admin share with robocopy rather than Copy-Item -FromSession:
-    # -FromSession -Recurse trips a PowerShell bug ("property 'Length' cannot be
-    # found") on large store trees, and robocopy is resumable and far faster for a
-    # multi-hundred-GB store. This runs as a single SMB hop from the caller to each
-    # side (the caller already needs admin on GC0 for PSRemoting, so C$ is reachable).
-    $adminShareStore = "\\$ComputerName\C`$\USMT\MigStore"
-    Write-Host "Copying MigStore from $adminShareStore to $NetworkMigStorePath..."
-    robocopy $adminShareStore $NetworkMigStorePath /E /R:2 /W:5 /NP /NFL /NDL /TEE | Out-Host
+    #region Push MigStore from GC0 to the network share (GC0-side push via RBCD)
+    # Run robocopy ON GC0 (inside the PSSession) pushing the store OUTBOUND to the
+    # file server, rather than pulling from GC0's C$ admin share. GC0 blocks inbound
+    # SMB (a Public firewall profile is active), so \\GC0\C$ is unreachable from the
+    # caller; and Copy-Item -FromSession trips a PowerShell bug ("property 'Length'
+    # cannot be found") on large store trees. GC0's outbound reach to the file share
+    # works via the Resource-Based Constrained Delegation configured for GC0 -> the
+    # file server (see Staging/NETLOGON/Config/KerberosDelegation.json). robocopy is
+    # resumable and fast for a multi-hundred-GB store.
+    Write-Host "Copying MigStore from $ComputerName to $NetworkMigStorePath (GC0-side push)..."
+    $copyExit = Invoke-Command -Session $session -ScriptBlock {
+        param([string]$LocalMigStore, [string]$NetworkMigStorePath)
+        if (-not (Test-Path $NetworkMigStorePath)) {
+            New-Item -Path $NetworkMigStorePath -ItemType Directory -Force | Out-Null
+        }
+        robocopy $LocalMigStore $NetworkMigStorePath /E /R:2 /W:5 /NP /NFL /NDL | Out-Host
+        $LASTEXITCODE
+    } -ArgumentList $localMigStore, $NetworkMigStorePath
     # robocopy exit codes < 8 indicate success (files copied / nothing to do).
-    if ($LASTEXITCODE -ge 8) {
-        throw "robocopy failed copying MigStore to $NetworkMigStorePath (exit $LASTEXITCODE)."
+    if ($copyExit -ge 8) {
+        throw "robocopy (on $ComputerName) failed copying MigStore to $NetworkMigStorePath (exit $copyExit)."
     }
     Write-Host "Backup complete. MigStore location: $NetworkMigStorePath"
     #endregion
