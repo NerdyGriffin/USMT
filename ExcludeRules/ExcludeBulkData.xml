@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ExcludeBulkData.xml
+
+  Generic exclude rules for large, regenerable content that bloats a migration
+  store without protecting any real user state. Everything excluded here rebuilds
+  itself on demand (caches) or is a temporary scratch area. Safe to apply in most
+  migrations; add it to DefaultExcludeRules in Config\Settings.psd1.
+
+  This file is a STARTING POINT. Environment-specific bulk (game libraries, cloud
+  sync folders, VM images) varies by machine and is intentionally NOT excluded by
+  default. Copy the commented examples at the bottom into the rule set and edit
+  the paths for your environment.
+
+  === Two components, by scope ===
+
+  Per-user folders MUST use CSIDL variables inside a "User" context component so
+  the rule expands once per profile. A literal "C:\Users\*\..." path matches
+  NOTHING: USMT does not treat a bare "*" path segment as "any user". CSIDL is
+  the documented per-user form:
+      %CSIDL_LOCAL_APPDATA% = C:\Users\<user>\AppData\Local
+      %CSIDL_PROFILE%       = C:\Users\<user>
+
+  System-wide literal paths use a "System" context component.
+
+  Pattern form "path\* [*]" excludes the folder and everything under it. An
+  unconditionalExclude always wins over any include rule.
+
+  Note for editors: XML comments must never contain a double hyphen. Use spaced
+  or single hyphens only.
+-->
+<migration urlid="http://www.microsoft.com/migration/1.0/migxmlext/exclude_bulk_data">
+
+  <!-- Per-user regenerable caches and temp (all profiles, via CSIDL) -->
+  <component type="Documents" context="User">
+    <displayName>Exclude per-user caches and temp</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Temp\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\NVIDIA\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\D3DSCache\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Microsoft\Windows\INetCache\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Microsoft\Windows\Explorer\* [*]</pattern>
+            <pattern type="File">%CSIDL_LOCAL_APPDATA%\Microsoft\Windows\WebCache\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+
+  <!--
+    === Environment-specific examples (disabled) ===
+
+    Uncomment and adapt. Game libraries and cloud-sync folders are the usual
+    space hogs, but their paths differ per machine, so they are left off by
+    default.
+
+    System-wide game library roots (System context):
+
+    <component type="Documents" context="System">
+      <displayName>Exclude game libraries</displayName>
+      <role role="Data">
+        <rules>
+          <unconditionalExclude>
+            <objectSet>
+              <pattern type="File">C:\GOG Games\* [*]</pattern>
+              <pattern type="File">C:\XboxGames\* [*]</pattern>
+              <pattern type="File">C:\Program Files\Epic Games\* [*]</pattern>
+            </objectSet>
+          </unconditionalExclude>
+        </rules>
+      </role>
+    </component>
+
+    Per-user cloud sync and app data (User context):
+
+    <component type="Documents" context="User">
+      <displayName>Exclude cloud sync folders</displayName>
+      <role role="Data">
+        <rules>
+          <unconditionalExclude>
+            <objectSet>
+              <pattern type="File">%CSIDL_PROFILE%\Nextcloud\* [*]</pattern>
+              <pattern type="File">%CSIDL_PROFILE%\OneDrive\* [*]</pattern>
+              <pattern type="File">%CSIDL_LOCAL_APPDATA%\Google\Play Games\* [*]</pattern>
+            </objectSet>
+          </unconditionalExclude>
+        </rules>
+      </role>
+    </component>
+  -->
+
+</migration>

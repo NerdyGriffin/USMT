@@ -1,0 +1,651 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Core USMT operations: sessions, binary staging, the store transfer
+    abstraction, XML validation, and scanstate/loadstate invocation.
+
+.DESCRIPTION
+    Every capture/restore is executed ON the subject machine - locally when no
+    computer name is supplied, or over a single reused PSSession when one is.
+    This module hides that split behind functions that accept an optional
+    -Session ($null = local) and behave identically either way.
+
+    The store transfer abstraction (Copy-MigStore) never uses
+    Copy-Item -To/-FromSession for the store itself: that trips a PowerShell bug
+    ("the property 'Length' cannot be found") on large trees. robocopy is used
+    throughout - it is resumable and reports success as an exit code < 8.
+
+    See DESIGN.md ("Transfer abstraction", "Lessons encoded in the design") for
+    the reasoning baked into these functions.
+#>
+
+Set-StrictMode -Version Latest
+
+#region Machine / session helpers
+
+function Test-UsmtLocalComputer {
+    <#
+    .SYNOPSIS
+        Returns $true when a computer name refers to the local machine.
+    .DESCRIPTION
+        Blank, 'localhost', '.', '127.0.0.1', the local COMPUTERNAME, or an FQDN
+        whose first label is the local COMPUTERNAME all count as local.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [string]$ComputerName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) { return $true }
+    if ($ComputerName -eq '.' -or $ComputerName -eq 'localhost' -or $ComputerName -eq '127.0.0.1') { return $true }
+    if ($ComputerName -ieq $env:COMPUTERNAME) { return $true }
+    if ($ComputerName -like "$env:COMPUTERNAME.*") { return $true }
+    return $false
+}
+
+function New-UsmtSession {
+    <#
+    .SYNOPSIS
+        Opens a PSSession to a remote machine, or returns $null for local runs.
+    .PARAMETER ComputerName
+        Target machine. Blank/local names return $null (run locally).
+    .PARAMETER Credential
+        Optional credential; defaults to the caller's Kerberos token.
+    #>
+    [CmdletBinding()]
+    param (
+        [string]$ComputerName,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    if (Test-UsmtLocalComputer -ComputerName $ComputerName) {
+        return $null
+    }
+
+    $sessionParams = @{ ComputerName = $ComputerName }
+    if ($Credential) {
+        $sessionParams['Credential'] = $Credential
+    }
+    return (New-PSSession @sessionParams)
+}
+
+function ConvertTo-UsmtAdminSharePath {
+    <#
+    .SYNOPSIS
+        Maps a rooted local path to its administrative-share UNC form.
+    .EXAMPLE
+        ConvertTo-UsmtAdminSharePath -ComputerName GC0 -LocalPath 'C:\USMT\MigStore'
+        # -> \\GC0\C$\USMT\MigStore
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [string]$ComputerName,
+
+        [Parameter(Mandatory)]
+        [string]$LocalPath
+    )
+
+    if ($LocalPath -notmatch '^[A-Za-z]:\\') {
+        throw "Path '$LocalPath' is not a rooted local path; cannot map to an admin share."
+    }
+    $drive = $LocalPath.Substring(0, 1)
+    $rest  = $LocalPath.Substring(3)   # strip 'C:\'
+    return ('\\{0}\{1}$\{2}' -f $ComputerName, $drive, $rest)
+}
+
+#endregion
+
+#region XML validation
+
+function Test-UsmtXmlFile {
+    <#
+    .SYNOPSIS
+        Validates an exclude-rule XML file before it is handed to scanstate.
+    .DESCRIPTION
+        Loads the file with System.Xml.XmlDocument so a malformed rule set is
+        caught here (a clear PowerShell error) instead of costing a full run that
+        ends in USMT error 29. Notably catches the "'--' inside an XML comment"
+        mistake (lesson 2 in DESIGN.md).
+    .PARAMETER Path
+        Path to the XML file.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Exclude-rule XML not found: $Path"
+    }
+
+    $xml = New-Object System.Xml.XmlDocument
+    try {
+        $xml.Load($Path)
+    } catch {
+        throw "Invalid XML in '$Path': $($_.Exception.Message)"
+    }
+    return $true
+}
+
+#endregion
+
+#region Binary staging
+
+function Copy-UsmtBinary {
+    <#
+    .SYNOPSIS
+        Ensures USMT binaries (and exclude-rule XMLs) are present on the subject
+        machine, and returns the paths to use for the run.
+    .DESCRIPTION
+        Local runs are a no-op: the caller-side paths are returned unchanged.
+        Remote runs push the amd64 folder into <StagingPath>\amd64 (only when the
+        binaries are missing) and always push the exclude-rule XMLs fresh so
+        tracked changes take effect on the next run.
+    .PARAMETER Session
+        Remote session, or $null for local.
+    .PARAMETER BinPath
+        Caller-side amd64 directory containing scanstate.exe / loadstate.exe.
+    .PARAMETER StagingPath
+        Remote working root (e.g. C:\USMT). Ignored for local runs.
+    .PARAMETER ExcludeXmlPath
+        Caller-side full paths to exclude-rule XMLs to make available.
+    .OUTPUTS
+        Hashtable with keys BinPath (dir holding scanstate/loadstate on the
+        subject machine) and ExcludeXmlPath (full paths valid on the subject
+        machine).
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param (
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [string]$BinPath,
+
+        [string]$StagingPath = 'C:\USMT',
+
+        [string[]]$ExcludeXmlPath = @()
+    )
+
+    # --- Local: nothing to copy ---
+    if (-not $Session) {
+        if (-not (Test-Path -LiteralPath (Join-Path $BinPath 'scanstate.exe'))) {
+            throw "scanstate.exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
+        }
+        return @{
+            BinPath        = $BinPath
+            ExcludeXmlPath = @($ExcludeXmlPath)
+        }
+    }
+
+    # --- Remote: stage binaries + exclude XMLs ---
+    $remoteBin = Join-Path $StagingPath 'amd64'
+
+    $hasBinaries = Invoke-Command -Session $Session -ScriptBlock {
+        param($RemoteBin)
+        Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')
+    } -ArgumentList $remoteBin
+
+    if (-not $hasBinaries) {
+        Invoke-Command -Session $Session -ScriptBlock {
+            param($StagingPath)
+            if (-not (Test-Path -LiteralPath $StagingPath)) {
+                New-Item -Path $StagingPath -ItemType Directory -Force | Out-Null
+            }
+        } -ArgumentList $StagingPath
+
+        # Copy-Item -ToSession is fine for the small binary payload (the store is
+        # deliberately transferred with robocopy instead - see Copy-MigStore).
+        Copy-Item -Path $BinPath -Destination $remoteBin -ToSession $Session -Recurse -Force
+    }
+
+    # Always refresh exclude-rule XMLs so edits take effect on re-run.
+    $remoteExclude = @()
+    foreach ($xml in @($ExcludeXmlPath)) {
+        if (-not $xml) { continue }
+        $leaf = Split-Path -Path $xml -Leaf
+        $dest = Join-Path $remoteBin $leaf
+        Copy-Item -Path $xml -Destination $dest -ToSession $Session -Force
+        $remoteExclude += $dest
+    }
+
+    return @{
+        BinPath        = $remoteBin
+        ExcludeXmlPath = $remoteExclude
+    }
+}
+
+#endregion
+
+#region Store transfer abstraction
+
+# Shared robocopy runner. Returns the robocopy exit code (< 8 = success).
+$script:UsmtRobocopyScript = {
+    param($Source, $Destination, $Files, $Options)
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+    }
+
+    $rcArgs = @($Source, $Destination)
+    foreach ($f in @($Files)) { if ($f) { $rcArgs += $f } }
+    foreach ($o in @($Options)) { if ($o) { $rcArgs += $o } }
+
+    robocopy @rcArgs | Out-Host
+    return $LASTEXITCODE
+}
+
+function Test-UsmtRobocopyOk {
+    <#
+    .SYNOPSIS
+        True when a robocopy exit code indicates success (< 8).
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [int]$ExitCode
+    )
+    return ($ExitCode -lt 8)
+}
+
+function Test-UsmtRemoteWrite {
+    <#
+    .SYNOPSIS
+        Throwaway test write used to probe the remote's second hop to the store.
+    .DESCRIPTION
+        Attempts to create the store directory and write/delete a tiny temp file
+        from INSIDE the session, i.e. as the remote machine. Success means the
+        SessionPushPull transfer method can reach the store; failure (typically a
+        double-hop/auth error) means it cannot.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    return (Invoke-Command -Session $Session -ScriptBlock {
+        param($StorePath)
+        try {
+            if (-not (Test-Path -LiteralPath $StorePath)) {
+                New-Item -Path $StorePath -ItemType Directory -Force | Out-Null
+            }
+            $probe = Join-Path $StorePath ('.usmt_probe_' + $PID + '.tmp')
+            Set-Content -LiteralPath $probe -Value 'probe' -ErrorAction Stop
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+            return $true
+        } catch {
+            return $false
+        }
+    } -ArgumentList $Path)
+}
+
+function Resolve-UsmtTransferMethod {
+    <#
+    .SYNOPSIS
+        Chooses a concrete transfer method for a remote store copy.
+    .DESCRIPTION
+        For 'Auto', probes in the order defined in DESIGN.md:
+          1. AdminShare      - can the caller reach \\<computer>\C$ ?
+          2. SessionPushPull - can the remote itself write to the store (2nd hop)?
+        Throws a structured diagnostic if neither works. An explicit method is
+        returned as-is.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateSet('Auto', 'AdminShare', 'SessionPushPull')]
+        [string]$TransferMethod,
+
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [string]$ComputerName,
+
+        [Parameter(Mandatory)]
+        [string]$StorePath
+    )
+
+    if ($TransferMethod -ne 'Auto') {
+        return $TransferMethod
+    }
+
+    # Probe 1: inbound SMB to the remote's admin share, from the caller.
+    $adminShareRoot = ('\\{0}\C$' -f $ComputerName)
+    $adminShareOk = Test-Path -LiteralPath $adminShareRoot -ErrorAction SilentlyContinue
+    if ($adminShareOk) {
+        return 'AdminShare'
+    }
+
+    # Probe 2: the remote's own second hop to the store (throwaway test write).
+    $secondHopOk = Test-UsmtRemoteWrite -Session $Session -Path $StorePath
+    if ($secondHopOk) {
+        return 'SessionPushPull'
+    }
+
+    throw @"
+Cannot transfer the migration store to/from '$ComputerName': no viable method.
+  - AdminShare probe FAILED: '$adminShareRoot' is unreachable from this machine
+    (inbound SMB to the remote is likely blocked by its firewall).
+  - SessionPushPull probe FAILED: the remote could not write to the store
+    '$StorePath' from within the session (the second hop to the file share
+    failed - a Kerberos double-hop / delegation issue).
+Resolve one of the two, or set TransferMethod explicitly. See the double-hop
+guidance in README.md (RBCD, constrained delegation, CredSSP, or a store design
+that avoids the second hop).
+"@
+}
+
+function Copy-MigStore {
+    <#
+    .SYNOPSIS
+        Transfers a migration store between the subject machine's working path and
+        the durable store, using the configured/probed transfer method.
+    .DESCRIPTION
+        Local runs (no -Session) robocopy directly between WorkPath and StorePath
+        under the caller's identity (a single hop). Remote runs use either the
+        caller-side admin share (AdminShare) or robocopy run inside the session
+        (SessionPushPull); 'Auto' probes for a working method.
+
+        Returns the robocopy exit code (see Test-UsmtRobocopyOk). Throws only for
+        configuration/probe failures, never for a non-zero robocopy code - the
+        caller decides whether a given copy is fatal (the store) or a warning
+        (log push-back).
+    .PARAMETER Direction
+        'Upload'   - move data from WorkPath into StorePath (backup / log push).
+        'Download' - move data from StorePath into WorkPath (restore).
+    .PARAMETER Session
+        Remote session, or $null for local.
+    .PARAMETER ComputerName
+        Remote machine name (required for remote runs).
+    .PARAMETER WorkPath
+        Store path local to the subject machine (where scanstate/loadstate runs).
+    .PARAMETER StorePath
+        Durable store path (local to the caller, or a UNC share).
+    .PARAMETER TransferMethod
+        'Auto', 'AdminShare', or 'SessionPushPull' (remote only).
+    .PARAMETER File
+        Optional list of specific file names to copy (no recursion). Used for log
+        push-back; omit to mirror the whole store tree.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateSet('Upload', 'Download')]
+        [string]$Direction,
+
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [string]$ComputerName,
+
+        [Parameter(Mandatory)]
+        [string]$WorkPath,
+
+        [Parameter(Mandatory)]
+        [string]$StorePath,
+
+        [ValidateSet('Auto', 'AdminShare', 'SessionPushPull')]
+        [string]$TransferMethod = 'Auto',
+
+        [string[]]$File = @()
+    )
+
+    # robocopy options: full mirror unless a specific file list was given.
+    $options = @('/R:2', '/W:5', '/NP', '/NFL', '/NDL')
+    if (-not ($File -and @($File).Count -gt 0)) {
+        $options = @('/E') + $options
+    }
+
+    # --- Local: single-hop copy under the caller's identity ---
+    if (-not $Session) {
+        if ($WorkPath -eq $StorePath) {
+            # Store and working copy are the same location; nothing to move.
+            return 0
+        }
+        if ($Direction -eq 'Upload') {
+            $src = $WorkPath; $dst = $StorePath
+        } else {
+            $src = $StorePath; $dst = $WorkPath
+        }
+        return (& $script:UsmtRobocopyScript $src $dst $File $options)
+    }
+
+    # --- Remote: pick a method ---
+    if ([string]::IsNullOrWhiteSpace($ComputerName)) {
+        throw 'Copy-MigStore requires -ComputerName for remote (session) transfers.'
+    }
+    $method = Resolve-UsmtTransferMethod -TransferMethod $TransferMethod `
+        -Session $Session -ComputerName $ComputerName -StorePath $StorePath
+
+    if ($method -eq 'AdminShare') {
+        # Caller-side robocopy over the remote's C$ admin share.
+        $workUnc = ConvertTo-UsmtAdminSharePath -ComputerName $ComputerName -LocalPath $WorkPath
+        if ($Direction -eq 'Upload') {
+            $src = $workUnc; $dst = $StorePath
+        } else {
+            $src = $StorePath; $dst = $workUnc
+        }
+        return (& $script:UsmtRobocopyScript $src $dst $File $options)
+    }
+
+    # SessionPushPull: robocopy executed inside the session (the remote reaches
+    # the store itself via its own second hop).
+    if ($Direction -eq 'Upload') {
+        $src = $WorkPath; $dst = $StorePath
+    } else {
+        $src = $StorePath; $dst = $WorkPath
+    }
+    return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtRobocopyScript `
+        -ArgumentList $src, $dst, $File, $options)
+}
+
+#endregion
+
+#region scanstate / loadstate
+
+# Core scanstate runner (executes on the subject machine, local or in-session).
+$script:UsmtScanStateScript = {
+    param($BinPath, $StorePath, $IncludeXml, $ExcludeXmlPath, $Verbosity, $IncludeUser, $SkipStaleProfileDays)
+
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    if (-not (Test-Path -LiteralPath $StorePath)) {
+        New-Item -Path $StorePath -ItemType Directory -Force | Out-Null
+    }
+    $exe = Join-Path $BinPath 'scanstate.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw "scanstate.exe not found at '$exe'."
+    }
+
+    $listLog = Join-Path $StorePath 'list_all.log'
+    $scanLog = Join-Path $StorePath 'scan_all.log'
+    $progLog = Join-Path $StorePath 'prog_all.log'
+
+    $a = @($StorePath, '/o', '/vsc', '/localonly')
+    foreach ($x in @($IncludeXml))     { if ($x) { $a += "/i:$x" } }
+    foreach ($x in @($ExcludeXmlPath)) { if ($x) { $a += "/i:$x" } }
+    $a += "/v:$Verbosity"
+    if (@($IncludeUser).Count -gt 0) {
+        # Exclude everyone, then re-include only the named users.
+        $a += '/ue:*\*'
+        foreach ($u in @($IncludeUser)) { if ($u) { $a += "/ui:$u" } }
+    }
+    if ($SkipStaleProfileDays -gt 0) {
+        $a += "/uel:$SkipStaleProfileDays"
+    }
+    $a += @("/listfiles:$listLog", "/l:$scanLog", "/progress:$progLog", '/c')
+
+    Write-Host "Running scanstate on $env:COMPUTERNAME -> $StorePath"
+    Push-Location $BinPath
+    try {
+        & $exe @a
+        return $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+}
+
+# Core loadstate runner (executes on the subject machine, local or in-session).
+$script:UsmtLoadStateScript = {
+    param($BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser)
+
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    $exe = Join-Path $BinPath 'loadstate.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw "loadstate.exe not found at '$exe'."
+    }
+
+    $loadLog = Join-Path $StorePath 'load_all.log'
+    $progLog = Join-Path $StorePath 'prog_load_all.log'
+
+    $a = @($StorePath)
+    foreach ($x in @($IncludeXml)) { if ($x) { $a += "/i:$x" } }
+    $a += "/v:$Verbosity"
+    $a += @('/lac', '/lae')
+    if (@($IncludeUser).Count -gt 0) {
+        $a += '/ue:*\*'
+        foreach ($u in @($IncludeUser)) { if ($u) { $a += "/ui:$u" } }
+    }
+    $a += @("/progress:$progLog", "/l:$loadLog", '/c')
+
+    Write-Host "Running loadstate on $env:COMPUTERNAME <- $StorePath"
+    Push-Location $BinPath
+    try {
+        & $exe @a
+        return $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+}
+
+function Invoke-UsmtScanState {
+    <#
+    .SYNOPSIS
+        Runs scanstate on the subject machine (local or over a session).
+    .DESCRIPTION
+        Always captures with /o (overwrite), /vsc (shadow copy for locked files),
+        /localonly, and /c (continue on non-fatal errors) - the settings the
+        lessons in DESIGN.md require. Returns the scanstate exit code.
+    .PARAMETER Session
+        Remote session, or $null for local.
+    .PARAMETER BinPath
+        Directory containing scanstate.exe on the subject machine.
+    .PARAMETER StorePath
+        Working store path on the subject machine (logs are written beside it).
+    .PARAMETER IncludeXml
+        Built-in migration XML names (resolved relative to BinPath).
+    .PARAMETER ExcludeXmlPath
+        Full paths to exclude-rule XMLs on the subject machine.
+    .PARAMETER Verbosity
+        scanstate /v level.
+    .PARAMETER IncludeUser
+        Explicit users to capture; empty = all local profiles.
+    .PARAMETER SkipStaleProfileDays
+        Opt-in /uel:N; 0 = capture all users including dormant ones.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param (
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [string]$BinPath,
+
+        [Parameter(Mandatory)]
+        [string]$StorePath,
+
+        [string[]]$IncludeXml = @('MigDocs.xml', 'MigApp.xml', 'MigAppData.xml'),
+
+        [string[]]$ExcludeXmlPath = @(),
+
+        [int]$Verbosity = 13,
+
+        [string[]]$IncludeUser = @(),
+
+        [int]$SkipStaleProfileDays = 0
+    )
+
+    if ($Session) {
+        return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtScanStateScript `
+            -ArgumentList $BinPath, $StorePath, $IncludeXml, $ExcludeXmlPath, $Verbosity, $IncludeUser, $SkipStaleProfileDays)
+    }
+    return (& $script:UsmtScanStateScript $BinPath $StorePath $IncludeXml $ExcludeXmlPath $Verbosity $IncludeUser $SkipStaleProfileDays)
+}
+
+function Invoke-UsmtLoadState {
+    <#
+    .SYNOPSIS
+        Runs loadstate on the subject machine (local or over a session).
+    .DESCRIPTION
+        Restores with /lac /lae (create + enable local accounts as needed) and
+        /c (continue on non-fatal errors). Exclude rules are intentionally NOT
+        applied at restore - the store already excludes that content at capture.
+        Returns the loadstate exit code.
+    .PARAMETER Session
+        Remote session, or $null for local.
+    .PARAMETER BinPath
+        Directory containing loadstate.exe on the subject machine.
+    .PARAMETER StorePath
+        Working store path on the subject machine (logs are written beside it).
+    .PARAMETER IncludeXml
+        Built-in migration XML names (resolved relative to BinPath).
+    .PARAMETER Verbosity
+        loadstate /v level.
+    .PARAMETER IncludeUser
+        Explicit users to restore; empty = all profiles in the store.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param (
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [string]$BinPath,
+
+        [Parameter(Mandatory)]
+        [string]$StorePath,
+
+        [string[]]$IncludeXml = @('MigDocs.xml', 'MigApp.xml', 'MigAppData.xml'),
+
+        [int]$Verbosity = 13,
+
+        [string[]]$IncludeUser = @()
+    )
+
+    if ($Session) {
+        return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtLoadStateScript `
+            -ArgumentList $BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser)
+    }
+    return (& $script:UsmtLoadStateScript $BinPath $StorePath $IncludeXml $Verbosity $IncludeUser)
+}
+
+#endregion
+
+Export-ModuleMember -Function `
+    Test-UsmtLocalComputer, `
+    New-UsmtSession, `
+    ConvertTo-UsmtAdminSharePath, `
+    Test-UsmtXmlFile, `
+    Copy-UsmtBinary, `
+    Test-UsmtRobocopyOk, `
+    Test-UsmtRemoteWrite, `
+    Resolve-UsmtTransferMethod, `
+    Copy-MigStore, `
+    Invoke-UsmtScanState, `
+    Invoke-UsmtLoadState
