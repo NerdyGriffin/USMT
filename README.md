@@ -76,6 +76,8 @@ files. **Never put credentials in a config file**; pass `-Credential` at runtime
 | `TransferMethod` | `Auto`, `AdminShare`, `SessionPushPull` | `Auto` |
 | `DefaultExcludeRules` | exclude-rule XML names always applied | `@()` |
 | `Verbosity` | scanstate/loadstate `/v` level | `13` |
+| `CreateLocalAccounts` | restore `/lac` — create missing local accounts (blank password); opt-in | `$false` |
+| `EnableLocalAccounts` | restore `/lae` — enable `/lac`-created accounts; requires `CreateLocalAccounts` | `$false` |
 
 ### Per-job — `Config/<name>.Migration.psd1`
 

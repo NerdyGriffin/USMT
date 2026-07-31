@@ -54,6 +54,15 @@
 .PARAMETER Verbosity
     loadstate /v level (override).
 
+.PARAMETER CreateLocalAccounts
+    Opt-in: add loadstate /lac to create local accounts that are in the store but
+    missing on the target. USMT creates them with a BLANK password, so this is off
+    by default. Domain accounts are unaffected (they are never created by /lac).
+
+.PARAMETER EnableLocalAccounts
+    Opt-in: add loadstate /lae to enable the accounts created by /lac. Requires
+    -CreateLocalAccounts (USMT: /lae is only valid with /lac). Off by default.
+
 .PARAMETER JobConfig
     Path to a <name>.Migration.psd1 job file.
 
@@ -96,6 +105,10 @@ param (
     [string]$TransferMethod,
 
     [int]$Verbosity,
+
+    [switch]$CreateLocalAccounts,
+
+    [switch]$EnableLocalAccounts,
 
     [string]$JobConfig,
 
@@ -163,6 +176,15 @@ if ($usersValue) {
         $includeUser = $usersArr
     }
 }
+
+# Local-account creation on restore (loadstate /lac /lae) - opt-in, default off,
+# because /lac creates missing local accounts with a blank password.
+$createLocalAccounts = [bool]$config.CreateLocalAccounts
+$enableLocalAccounts = [bool]$config.EnableLocalAccounts
+# USMT: /lae is only valid with /lac. Enabling without creating is a config error.
+if ($enableLocalAccounts -and -not $createLocalAccounts) {
+    throw "EnableLocalAccounts requires CreateLocalAccounts (USMT /lae requires /lac). Enable CreateLocalAccounts as well, or clear EnableLocalAccounts."
+}
 #endregion
 
 Start-UsmtLog -ScriptName 'Restore-UserState' -LogRoot $config.LogRoot -ComputerName $subjectLabel | Out-Null
@@ -177,6 +199,7 @@ try {
     } else {
         Write-Log "  Users        : All profiles in store" 'INFO'
     }
+    Write-Log "  Local accts  : create=$createLocalAccounts enable=$enableLocalAccounts (/lac /lae opt-in)" 'INFO'
 
     # Fail fast on a missing store, but only when the caller can actually see it:
     # if the store root is reachable yet the named subfolder is absent, that is a
@@ -216,7 +239,8 @@ try {
 
         # Restore.
         $loadExit = Invoke-UsmtLoadState -Session $session -BinPath $staged.BinPath `
-            -StorePath $workPath -Verbosity $config.Verbosity -IncludeUser $includeUser
+            -StorePath $workPath -Verbosity $config.Verbosity -IncludeUser $includeUser `
+            -CreateLocalAccount $createLocalAccounts -EnableLocalAccount $enableLocalAccounts
 
         # Classify the loadstate result. With /c, code 3 (USMT_WOULD_HAVE_FAILED)
         # means the restore completed but some non-fatal errors were skipped - a

@@ -552,7 +552,7 @@ $script:UsmtScanStateScript = {
 
 # Core loadstate runner (executes on the subject machine, local or in-session).
 $script:UsmtLoadStateScript = {
-    param($BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser)
+    param($BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser, $CreateLocalAccount, $EnableLocalAccount)
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
@@ -568,7 +568,11 @@ $script:UsmtLoadStateScript = {
     $a = @($StorePath)
     foreach ($x in @($IncludeXml)) { if ($x) { $a += "/i:$x" } }
     $a += "/v:$Verbosity"
-    $a += @('/lac', '/lae')
+    # Local-account creation is opt-in: /lac creates missing local accounts with a
+    # blank password, so it is only added on request. /lae (enable) requires /lac;
+    # the caller (Restore-UserState) enforces that invariant before we get here.
+    if ($CreateLocalAccount) { $a += '/lac' }
+    if ($EnableLocalAccount) { $a += '/lae' }
     if (@($IncludeUser).Count -gt 0) {
         $a += '/ue:*\*'
         foreach ($u in @($IncludeUser)) { if ($u) { $a += "/ui:$u" } }
@@ -646,10 +650,11 @@ function Invoke-UsmtLoadState {
     .SYNOPSIS
         Runs loadstate on the subject machine (local or over a session).
     .DESCRIPTION
-        Restores with /lac /lae (create + enable local accounts as needed) and
-        /c (continue on non-fatal errors). Exclude rules are intentionally NOT
-        applied at restore - the store already excludes that content at capture.
-        Returns the loadstate exit code.
+        Restores with /c (continue on non-fatal errors). Local-account creation
+        (/lac) and enabling (/lae) are opt-in - off unless the caller requests
+        them - because /lac creates accounts with a blank password. Exclude rules
+        are intentionally NOT applied at restore - the store already excludes that
+        content at capture. Returns the loadstate exit code.
     .PARAMETER Session
         Remote session, or $null for local.
     .PARAMETER BinPath
@@ -662,6 +667,11 @@ function Invoke-UsmtLoadState {
         loadstate /v level.
     .PARAMETER IncludeUser
         Explicit users to restore; empty = all profiles in the store.
+    .PARAMETER CreateLocalAccount
+        Add /lac to create missing local accounts (blank password). Default $false.
+    .PARAMETER EnableLocalAccount
+        Add /lae to enable /lac-created accounts. Requires CreateLocalAccount
+        (enforced by the caller). Default $false.
     #>
     [CmdletBinding()]
     [OutputType([int])]
@@ -678,14 +688,18 @@ function Invoke-UsmtLoadState {
 
         [int]$Verbosity = 13,
 
-        [string[]]$IncludeUser = @()
+        [string[]]$IncludeUser = @(),
+
+        [bool]$CreateLocalAccount = $false,
+
+        [bool]$EnableLocalAccount = $false
     )
 
     if ($Session) {
         return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtLoadStateScript `
-            -ArgumentList $BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser)
+            -ArgumentList $BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser, $CreateLocalAccount, $EnableLocalAccount)
     }
-    return (& $script:UsmtLoadStateScript $BinPath $StorePath $IncludeXml $Verbosity $IncludeUser)
+    return (& $script:UsmtLoadStateScript $BinPath $StorePath $IncludeXml $Verbosity $IncludeUser $CreateLocalAccount $EnableLocalAccount)
 }
 
 #endregion

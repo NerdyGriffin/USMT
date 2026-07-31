@@ -49,4 +49,13 @@
 
     # scanstate/loadstate /v verbosity level (0-13). Default: 13 (most detailed).
     Verbosity           = 13
+
+    # Local-account creation at restore (loadstate /lac /lae). Opt-in, OFF by
+    # default: /lac creates local accounts present in the store but missing on the
+    # target, with a BLANK password - so creation is opt-in (mirrors USMT's own
+    # /lac /lae). EnableLocalAccounts (/lae) also enables those accounts and
+    # REQUIRES CreateLocalAccounts. Domain accounts are never created by /lac.
+    # Both can also be passed per run: -CreateLocalAccounts / -EnableLocalAccounts.
+    CreateLocalAccounts = $false
+    EnableLocalAccounts = $false
 }

@@ -118,6 +118,13 @@ function Get-UsmtDefaultSettings {
         DefaultExcludeRules  = @()
         Verbosity            = 13
 
+        # Local-account creation on restore (loadstate /lac /lae). Off by default:
+        # accounts auto-created by /lac get a blank password, so creating and
+        # enabling them is opt-in - mirroring USMT's own opt-in /lac /lae. /lae
+        # (enable) requires /lac (create); the restore script enforces that.
+        CreateLocalAccounts  = $false
+        EnableLocalAccounts  = $false
+
         # --- Per-job (<name>.Migration.psd1) ---
         SourceComputer       = ''
         TargetComputer       = ''
