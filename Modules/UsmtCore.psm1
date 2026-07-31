@@ -606,6 +606,77 @@ $script:UsmtLoadStateScript = {
     }
 }
 
+function Get-UsmtRemoteExitCode {
+    <#
+    .SYNOPSIS
+        Runs a scanstate/loadstate scriptblock (local or in a remote session) and
+        returns its integer exit code, treating a lost or aborted run as a failure
+        rather than a spurious success.
+
+    .DESCRIPTION
+        Each runner scriptblock ends with `return $LASTEXITCODE` - a single integer.
+        When a remote session drops mid-run (target reboot, network loss, crash),
+        Invoke-Command either throws or returns nothing, and a $null result silently
+        coerces to 0 - which the caller would otherwise report as a clean success on
+        a store or restore that never actually finished. This wrapper converts both
+        cases (a thrown remoting error, or a missing/non-numeric result) into a clear
+        terminating error so the caller fails loudly.
+
+    .PARAMETER Operation
+        'scanstate' or 'loadstate', used only in error messages.
+
+    .PARAMETER Session
+        Remote session, or $null to run locally.
+
+    .PARAMETER ScriptBlock
+        The runner scriptblock to execute.
+
+    .PARAMETER ArgumentList
+        Positional arguments for the scriptblock.
+
+    .OUTPUTS
+        [int] The validated process exit code.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param (
+        [Parameter(Mandatory)]
+        [string]$Operation,
+
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory)]
+        [scriptblock]$ScriptBlock,
+
+        [object[]]$ArgumentList = @()
+    )
+
+    if ($Session) {
+        try {
+            $result = Invoke-Command -Session $Session -ScriptBlock $ScriptBlock `
+                -ArgumentList $ArgumentList -ErrorAction Stop
+        } catch {
+            throw "$Operation did not complete on the remote machine - the session was lost or the command was aborted ($($_.Exception.Message)). No trustworthy exit code was returned; treating this as a failure."
+        }
+    } else {
+        $result = & $ScriptBlock @ArgumentList
+    }
+
+    # A finished run yields exactly one integer (the process exit code). $null, an
+    # empty result, or a non-integer means the run did not complete - never let that
+    # coerce to 0 and masquerade as success.
+    $codes = @($result | Where-Object { $null -ne $_ })
+    if ($codes.Count -eq 0) {
+        throw "$Operation returned no exit code (the session may have dropped mid-run). Treating this as a failure rather than a success."
+    }
+    $last = $codes[-1]
+    $parsed = 0
+    if (-not [int]::TryParse([string]$last, [ref]$parsed)) {
+        throw "$Operation returned a non-numeric result '$last' instead of an exit code. Treating this as a failure."
+    }
+    return $parsed
+}
+
 function Invoke-UsmtScanState {
     <#
     .SYNOPSIS
@@ -653,11 +724,9 @@ function Invoke-UsmtScanState {
         [int]$SkipStaleProfileDays = 0
     )
 
-    if ($Session) {
-        return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtScanStateScript `
-            -ArgumentList $BinPath, $StorePath, $IncludeXml, $ExcludeXmlPath, $Verbosity, $IncludeUser, $SkipStaleProfileDays)
-    }
-    return (& $script:UsmtScanStateScript $BinPath $StorePath $IncludeXml $ExcludeXmlPath $Verbosity $IncludeUser $SkipStaleProfileDays)
+    return (Get-UsmtRemoteExitCode -Operation 'scanstate' -Session $Session `
+        -ScriptBlock $script:UsmtScanStateScript `
+        -ArgumentList @($BinPath, $StorePath, $IncludeXml, $ExcludeXmlPath, $Verbosity, $IncludeUser, $SkipStaleProfileDays))
 }
 
 function Invoke-UsmtLoadState {
@@ -716,11 +785,9 @@ function Invoke-UsmtLoadState {
         throw "EnableLocalAccount requires CreateLocalAccount (USMT /lae requires /lac)."
     }
 
-    if ($Session) {
-        return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtLoadStateScript `
-            -ArgumentList $BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser, $CreateLocalAccount, $EnableLocalAccount)
-    }
-    return (& $script:UsmtLoadStateScript $BinPath $StorePath $IncludeXml $Verbosity $IncludeUser $CreateLocalAccount $EnableLocalAccount)
+    return (Get-UsmtRemoteExitCode -Operation 'loadstate' -Session $Session `
+        -ScriptBlock $script:UsmtLoadStateScript `
+        -ArgumentList @($BinPath, $StorePath, $IncludeXml, $Verbosity, $IncludeUser, $CreateLocalAccount, $EnableLocalAccount))
 }
 
 #endregion
