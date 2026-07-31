@@ -223,10 +223,20 @@ try {
             -Verbosity $config.Verbosity -IncludeUser $includeUser `
             -SkipStaleProfileDays $config.SkipStaleProfileDays
 
-        if ($scanExit -eq 0) {
-            Write-Log "scanstate completed successfully." 'SUCCESS'
-        } else {
-            Write-Log "scanstate returned exit code $scanExit; transferring logs for diagnosis, then failing." 'ERROR'
+        # Classify the scanstate result. With /c, code 3 (USMT_WOULD_HAVE_FAILED)
+        # means the capture completed but some non-fatal errors were skipped - a
+        # usable store, not a failure. Only other non-zero codes are fatal.
+        $scanDisposition = Get-UsmtExitDisposition -ExitCode $scanExit
+        switch ($scanDisposition) {
+            'Success' {
+                Write-Log "scanstate completed successfully." 'SUCCESS'
+            }
+            'CompletedWithSkips' {
+                Write-Log "scanstate returned exit code 3: the capture completed, but /c skipped one or more non-fatal errors (e.g. locked or ACL-protected files). Review scan_all.log in $storePath to see what was skipped." 'WARN'
+            }
+            default {
+                Write-Log "scanstate returned exit code $scanExit; transferring logs for diagnosis, then failing." 'ERROR'
+            }
         }
 
         # Transfer the store to its durable location (skipped when work == store).
@@ -241,9 +251,9 @@ try {
             Write-Log "Store transfer complete." 'SUCCESS'
         }
 
-        # A non-zero USMT code means no usable store was produced (with /c,
-        # non-fatal errors are absorbed and scanstate still returns 0).
-        if ($scanExit -ne 0) {
+        # A genuine failure means no usable store was produced. Codes 0 and 3 both
+        # leave a usable store (3 = some non-fatal items skipped by /c).
+        if ($scanDisposition -eq 'Failure') {
             throw "scanstate returned exit code $scanExit on '$subjectLabel'; no usable store was produced. Review scan_all.log in $storePath."
         }
 
@@ -256,3 +266,9 @@ try {
 } finally {
     Stop-UsmtLog
 }
+
+# Reached only on the success path (a thrown error propagates out before here and
+# terminates the script non-zero). Set a clean exit code so a benign robocopy
+# result (e.g. exit 1 = "files copied") left in $LASTEXITCODE cannot be mistaken
+# for failure by an automated caller.
+exit 0

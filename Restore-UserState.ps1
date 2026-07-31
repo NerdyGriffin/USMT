@@ -218,10 +218,20 @@ try {
         $loadExit = Invoke-UsmtLoadState -Session $session -BinPath $staged.BinPath `
             -StorePath $workPath -Verbosity $config.Verbosity -IncludeUser $includeUser
 
-        if ($loadExit -eq 0) {
-            Write-Log "loadstate completed successfully." 'SUCCESS'
-        } else {
-            Write-Log "loadstate returned exit code $loadExit; pushing logs for diagnosis, then failing." 'ERROR'
+        # Classify the loadstate result. With /c, code 3 (USMT_WOULD_HAVE_FAILED)
+        # means the restore completed but some non-fatal errors were skipped - a
+        # usable restore, not a failure. Only other non-zero codes are fatal.
+        $loadDisposition = Get-UsmtExitDisposition -ExitCode $loadExit
+        switch ($loadDisposition) {
+            'Success' {
+                Write-Log "loadstate completed successfully." 'SUCCESS'
+            }
+            'CompletedWithSkips' {
+                Write-Log "loadstate returned exit code 3: the restore completed, but /c skipped one or more non-fatal errors (e.g. locked or ACL-protected files). Review load_all.log in $storePath to see what was skipped." 'WARN'
+            }
+            default {
+                Write-Log "loadstate returned exit code $loadExit; pushing logs for diagnosis, then failing." 'ERROR'
+            }
         }
 
         # Push load logs back to the durable store for record-keeping (non-fatal),
@@ -236,8 +246,8 @@ try {
             }
         }
 
-        # A non-zero USMT code means the restore did not complete cleanly.
-        if ($loadExit -ne 0) {
+        # Only a genuine failure is fatal; codes 0 and 3 both leave a usable restore.
+        if ($loadDisposition -eq 'Failure') {
             throw "loadstate returned exit code $loadExit on '$subjectLabel'; review load_all.log in $storePath."
         }
 
@@ -250,3 +260,9 @@ try {
 } finally {
     Stop-UsmtLog
 }
+
+# Reached only on the success path (a thrown error propagates out before here and
+# terminates the script non-zero). Set a clean exit code so a benign robocopy
+# result (e.g. exit 1 = "files copied") left in $LASTEXITCODE cannot be mistaken
+# for failure by an automated caller.
+exit 0

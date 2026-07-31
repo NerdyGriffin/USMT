@@ -254,6 +254,44 @@ function Test-UsmtRobocopyOk {
     return ($ExitCode -lt 8)
 }
 
+function Get-UsmtExitDisposition {
+    <#
+    .SYNOPSIS
+        Classifies a scanstate/loadstate exit code as Success, CompletedWithSkips,
+        or Failure.
+
+    .DESCRIPTION
+        The toolkit always runs USMT with /c, so non-fatal errors (locked files,
+        ACL-protected paths, Defender data, etc.) are skipped rather than aborting
+        the run. USMT signals this with return code 3 (USMT_WOULD_HAVE_FAILED,
+        "at least one error was skipped as a result of /c"). That is a completed,
+        usable migration - not a failure - so it maps to 'CompletedWithSkips' and
+        the caller should surface a WARN pointing at the log, not throw.
+
+        Only exit code 0 is a clean success. Every other code (invalid command
+        line, setup/init errors, non-fatal I/O stop, fatal errors) is a genuine
+        failure the caller must treat as fatal.
+
+        See https://learn.microsoft.com/windows/deployment/usmt/usmt-return-codes.
+
+    .PARAMETER ExitCode
+        The scanstate or loadstate process exit code.
+
+    .OUTPUTS
+        [string] 'Success', 'CompletedWithSkips', or 'Failure'.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [int]$ExitCode
+    )
+
+    if ($ExitCode -eq 0) { return 'Success' }
+    if ($ExitCode -eq 3) { return 'CompletedWithSkips' }
+    return 'Failure'
+}
+
 function Test-UsmtRemoteWrite {
     <#
     .SYNOPSIS
@@ -648,6 +686,7 @@ Export-ModuleMember -Function `
     Test-UsmtXmlFile, `
     Copy-UsmtBinary, `
     Test-UsmtRobocopyOk, `
+    Get-UsmtExitDisposition, `
     Test-UsmtRemoteWrite, `
     Resolve-UsmtTransferMethod, `
     Copy-MigStore, `
