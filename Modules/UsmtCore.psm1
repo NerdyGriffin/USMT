@@ -571,9 +571,12 @@ $script:UsmtLoadStateScript = {
     $a = @($StorePath)
     foreach ($x in @($IncludeXml)) { if ($x) { $a += "/i:$x" } }
     $a += "/v:$Verbosity"
-    # Local-account creation is opt-in: /lac creates missing local accounts with a
-    # blank password, so it is only added on request. /lae (enable) requires /lac;
-    # the caller (Restore-UserState) enforces that invariant before we get here.
+    # SECURITY: when a local account in the store does not exist on the target,
+    # /lac recreates it with a BLANK PASSWORD and /lae enables it - i.e. an
+    # unsecured, immediately logon-able account. That blank-password exposure (not
+    # the recreation itself) is why both are opt-in and OFF by default, added only
+    # on explicit request. Domain accounts are never created by /lac. /lae requires
+    # /lac; the caller (Restore-UserState) enforces that invariant before we get here.
     if ($CreateLocalAccount) { $a += '/lac' }
     if ($EnableLocalAccount) { $a += '/lae' }
     if (@($IncludeUser).Count -gt 0) {
