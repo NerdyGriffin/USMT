@@ -193,15 +193,18 @@ function Copy-UsmtBinary {
 
     if (-not $hasBinaries) {
         Invoke-Command -Session $Session -ScriptBlock {
-            param($StagingPath)
-            if (-not (Test-Path -LiteralPath $StagingPath)) {
-                New-Item -Path $StagingPath -ItemType Directory -Force | Out-Null
+            param($RemoteBin)
+            if (-not (Test-Path -LiteralPath $RemoteBin)) {
+                New-Item -Path $RemoteBin -ItemType Directory -Force | Out-Null
             }
-        } -ArgumentList $StagingPath
+        } -ArgumentList $remoteBin
 
         # Copy-Item -ToSession is fine for the small binary payload (the store is
         # deliberately transferred with robocopy instead - see Copy-MigStore).
-        Copy-Item -Path $BinPath -Destination $remoteBin -ToSession $Session -Recurse -Force
+        # Copy the *contents* of amd64 into $remoteBin: copying the folder itself
+        # nests it (C:\USMT\amd64\amd64) whenever the destination already exists
+        # from a prior or interrupted run, which hides scanstate.exe.
+        Copy-Item -Path (Join-Path $BinPath '*') -Destination $remoteBin -ToSession $Session -Recurse -Force
     }
 
     # Always refresh exclude-rule XMLs so edits take effect on re-run.
@@ -441,10 +444,18 @@ function Copy-MigStore {
         [string[]]$File = @()
     )
 
-    # robocopy options: full mirror unless a specific file list was given.
+    # robocopy options. A specific file list copies just those files (no
+    # recursion). A full-tree copy uses /E when publishing to the durable store
+    # (Upload - never purge the destination) and /MIR when staging a store for
+    # restore (Download - mirror so a prior restore's leftovers in the work path
+    # cannot mix with this store and feed stale content to loadstate).
     $options = @('/R:2', '/W:5', '/NP', '/NFL', '/NDL')
     if (-not ($File -and @($File).Count -gt 0)) {
-        $options = @('/E') + $options
+        if ($Direction -eq 'Download') {
+            $options = @('/MIR') + $options
+        } else {
+            $options = @('/E') + $options
+        }
     }
 
     # --- Local: single-hop copy under the caller's identity ---

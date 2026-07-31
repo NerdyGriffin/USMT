@@ -312,8 +312,15 @@ function Invoke-Configuration {
     $verbosity = Read-ConfigValue -Prompt 'Verbosity /v level (0-13)' -Current ([string]$current.Verbosity) -DisplayDefault '13'
 
     $excludes = ConvertTo-StringArray -Value $excludesCsv
-    $verbInt = 13
-    [void][int]::TryParse($verbosity, [ref]$verbInt)
+    # TryParse writes 0 into the ref on a non-numeric answer, which would silently
+    # pick the least-detailed verbosity; validate and keep 13 on bad/out-of-range input.
+    $parsed = 0
+    if ([int]::TryParse($verbosity, [ref]$parsed) -and $parsed -ge 0 -and $parsed -le 13) {
+        $verbInt = $parsed
+    } else {
+        Write-Warning "Verbosity '$verbosity' is not a number in 0-13; keeping 13."
+        $verbInt = 13
+    }
 
     $content = @"
 <#

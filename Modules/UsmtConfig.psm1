@@ -134,6 +134,24 @@ function Get-UsmtDefaultSettings {
 
 #region Resolution
 
+function Test-UsmtSuppliedValue {
+    <#
+    .SYNOPSIS
+        Returns $true when a config tier actually supplies a usable value.
+    .DESCRIPTION
+        A value counts as supplied unless it is $null or a blank/whitespace string.
+        Non-string values (arrays, ints, bools) always count. This lets blank keys
+        in Settings.psd1 / a job file fall through to the computed default, matching
+        the "a blank/absent key falls back to the default" contract documented in
+        the config templates - a blank UsmtBinPath/LogRoot must not win over
+        <repo>\amd64 / <repo>\Logs.
+    #>
+    param($Value)
+    if ($null -eq $Value) { return $false }
+    if (($Value -is [string]) -and [string]::IsNullOrWhiteSpace($Value)) { return $false }
+    return $true
+}
+
 function Resolve-UsmtSetting {
     <#
     .SYNOPSIS
@@ -175,12 +193,15 @@ function Resolve-UsmtSetting {
         return $Parameters[$Key]
     }
 
-    # Job and global tiers win only when they actually supply a non-null value.
-    if ($Job.ContainsKey($Key) -and $null -ne $Job[$Key]) {
+    # Job and global tiers win only when they actually supply a usable value. A
+    # $null or a blank/whitespace string is treated as "not set" so it cannot
+    # override a computed default (e.g. the blank path keys in the shipped
+    # Settings template must fall back to <repo>\... as documented).
+    if ($Job.ContainsKey($Key) -and (Test-UsmtSuppliedValue $Job[$Key])) {
         return $Job[$Key]
     }
 
-    if ($Settings.ContainsKey($Key) -and $null -ne $Settings[$Key]) {
+    if ($Settings.ContainsKey($Key) -and (Test-UsmtSuppliedValue $Settings[$Key])) {
         return $Settings[$Key]
     }
 
