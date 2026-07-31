@@ -13,8 +13,10 @@
     still runs ON the target machine, with the store transferred to it per the
     configured TransferMethod (see the transfer abstraction in DESIGN.md).
 
-    loadstate runs with /lac /lae /c and the configured verbosity. Exclude rules
-    are not applied at restore - the store already excludes that content at capture.
+    loadstate always runs with /c and the configured verbosity; /lac and /lae are
+    added only when -CreateLocalAccounts / -EnableLocalAccounts are set. Exclude
+    rules are not applied at restore - the store already excludes that content at
+    capture.
 
 .PARAMETER TargetComputer
     Machine to restore onto. Omit (or use the local name) to restore locally.

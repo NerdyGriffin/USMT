@@ -188,7 +188,10 @@ function Copy-UsmtBinary {
 
     $hasBinaries = Invoke-Command -Session $Session -ScriptBlock {
         param($RemoteBin)
-        Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')
+        # Require BOTH executables: a partial prior copy could leave scanstate.exe
+        # without loadstate.exe, and skipping staging would then break restore.
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')) -and
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe'))
     } -ArgumentList $remoteBin
 
     if (-not $hasBinaries) {
@@ -694,6 +697,12 @@ function Invoke-UsmtLoadState {
 
         [bool]$EnableLocalAccount = $false
     )
+
+    # USMT: /lae is only valid with /lac. Enforce it here too (not just in
+    # Restore-UserState) since this function is exported and callable directly.
+    if ($EnableLocalAccount -and -not $CreateLocalAccount) {
+        throw "EnableLocalAccount requires CreateLocalAccount (USMT /lae requires /lac)."
+    }
 
     if ($Session) {
         return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtLoadStateScript `
