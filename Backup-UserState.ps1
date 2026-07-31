@@ -239,16 +239,29 @@ try {
             }
         }
 
-        # Transfer the store to its durable location (skipped when work == store).
-        # Done even on scanstate failure so the logs come back for diagnosis.
+        # Bring results to the durable store (skipped when work == store). On a
+        # usable capture (Success/CompletedWithSkips) publish the whole store; on
+        # failure copy ONLY the diagnostic logs, so a partial/unusable capture
+        # never overwrites a previously-good store's payload (USMT\USMT.MIG) - the
+        # logs still come back for diagnosis. (In Local mode with work == store the
+        # transfer is skipped entirely, and scanstate /o has already overwritten
+        # the store in place; protecting a prior store there would need staging.)
         if ($session -or ($workPath -ne $storePath)) {
-            Write-Log "Transferring store to $storePath ..." 'INFO'
-            $rc = Copy-MigStore -Direction 'Upload' -Session $session -ComputerName $sourceComputer `
-                -WorkPath $workPath -StorePath $storePath -TransferMethod $config.TransferMethod
-            if (-not (Test-UsmtRobocopyOk -ExitCode $rc)) {
-                throw "robocopy failed (exit $rc) copying the store to '$storePath'."
+            if ($scanDisposition -eq 'Failure') {
+                Write-Log "scanstate failed; transferring diagnostic logs only (not the payload) to $storePath ..." 'INFO'
+                $rc = Copy-MigStore -Direction 'Upload' -Session $session -ComputerName $sourceComputer `
+                    -WorkPath $workPath -StorePath $storePath -TransferMethod $config.TransferMethod `
+                    -File @('scan_all.log', 'list_all.log', 'prog_all.log', 'MigLog.xml')
+            } else {
+                Write-Log "Transferring store to $storePath ..." 'INFO'
+                $rc = Copy-MigStore -Direction 'Upload' -Session $session -ComputerName $sourceComputer `
+                    -WorkPath $workPath -StorePath $storePath -TransferMethod $config.TransferMethod
             }
-            Write-Log "Store transfer complete." 'SUCCESS'
+            if (-not (Test-UsmtRobocopyOk -ExitCode $rc)) {
+                $what = if ($scanDisposition -eq 'Failure') { 'diagnostic logs' } else { 'the store' }
+                throw "robocopy failed (exit $rc) copying $what to '$storePath'."
+            }
+            Write-Log "Transfer complete." 'SUCCESS'
         }
 
         # A genuine failure means no usable store was produced. Codes 0 and 3 both
