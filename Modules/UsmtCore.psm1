@@ -63,11 +63,20 @@ function New-UsmtSession {
         return $null
     }
 
-    $sessionParams = @{ ComputerName = $ComputerName }
+    # Fail closed: a failed New-PSSession must never fall through as $null, which
+    # the entry points treat as local mode - that would silently run USMT on the
+    # caller instead of the requested remote machine. Force New-PSSession itself to
+    # throw (ErrorAction Stop in the splat, so it holds even if a caller invokes
+    # New-UsmtSession with a laxer -ErrorAction), and reject a null session too.
+    $sessionParams = @{ ComputerName = $ComputerName; ErrorAction = 'Stop' }
     if ($Credential) {
         $sessionParams['Credential'] = $Credential
     }
-    return (New-PSSession @sessionParams)
+    $session = New-PSSession @sessionParams
+    if (-not $session) {
+        throw "Failed to open a PSSession to '$ComputerName' (no session was returned)."
+    }
+    return $session
 }
 
 function ConvertTo-UsmtAdminSharePath {
