@@ -509,8 +509,19 @@ function Copy-MigStore {
     } else {
         $src = $StorePath; $dst = $WorkPath
     }
-    return (Invoke-Command -Session $Session -ScriptBlock $script:UsmtRobocopyScript `
-        -ArgumentList $src, $dst, $File, $options)
+    # Fail closed: a dropped session must not return $null here - that would coerce
+    # to robocopy exit 0 and read as a successful copy. Force the remote call to
+    # throw, and map a lost session or a missing result to robocopy's "serious
+    # error" code (16, >= 8) so the caller's Test-UsmtRobocopyOk treats it as a
+    # failed copy (fatal for a store transfer, a WARN for a best-effort log push).
+    try {
+        $rc = Invoke-Command -Session $Session -ScriptBlock $script:UsmtRobocopyScript `
+            -ArgumentList $src, $dst, $File, $options -ErrorAction Stop
+    } catch {
+        return 16
+    }
+    if ($null -eq $rc) { return 16 }
+    return $rc
 }
 
 #endregion
