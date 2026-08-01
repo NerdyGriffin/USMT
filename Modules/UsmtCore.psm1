@@ -518,6 +518,9 @@ function Copy-MigStore {
         $rc = Invoke-Command -Session $Session -ScriptBlock $script:UsmtRobocopyScript `
             -ArgumentList $src, $dst, $File, $options -ErrorAction Stop
     } catch {
+        # Preserve the cause so the fail-closed mapping stays diagnosable - an
+        # opaque exit 16 alone reads the same as a genuine robocopy failure.
+        Write-Warning "robocopy did not complete on the remote machine - the session was lost or the command was aborted ($($_.Exception.Message)). Mapping to robocopy failure code 16."
         return 16
     }
     if ($null -eq $rc) { return 16 }
