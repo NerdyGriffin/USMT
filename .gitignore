@@ -1,6 +1,18 @@
+# FreeFileSync artifacts
 *.ffs_db
 *.ffs_lock
-amd64
-MigStore
-Windows ADK Installers
 SyncUSMT.ffs_gui
+
+# USMT binaries (acquired by Setup.ps1, not redistributable)
+amd64
+Windows ADK Installers
+
+# Migration stores and logs (runtime data)
+MigStore
+Logs
+
+# Real configuration (environment identity lives here, never in tracked files).
+# The committed Example.*.psd1 templates are kept.
+Config/Settings.psd1
+Config/*.Migration.psd1
+!Config/Example.Migration.psd1

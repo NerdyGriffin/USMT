@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ExcludeDefender.xml
+
+  Excludes the Microsoft Defender ProgramData tree from capture. That tree is
+  tamper-protected and not writable at restore time, so including it produces
+  hundreds of would-be fatal errors that only /c (continue on error) keeps from
+  aborting the run. None of it is user state, so dropping it is pure benefit.
+
+  This is a System-context rule with a literal path (the tree is machine-wide,
+  not per profile). Recommended in every migration; add it to DefaultExcludeRules
+  in Config\Settings.psd1.
+
+  Pattern form "path\* [*]" excludes the folder and everything under it. An
+  unconditionalExclude always wins over any include rule.
+
+  Note for editors: XML comments must never contain a double hyphen. Use spaced
+  or single hyphens only.
+-->
+<migration urlid="http://www.microsoft.com/migration/1.0/migxmlext/exclude_defender">
+
+  <component type="Documents" context="System">
+    <displayName>Exclude Microsoft Defender ProgramData tree</displayName>
+    <role role="Data">
+      <rules>
+        <unconditionalExclude>
+          <objectSet>
+            <pattern type="File">C:\ProgramData\Microsoft\Windows Defender\* [*]</pattern>
+          </objectSet>
+        </unconditionalExclude>
+      </rules>
+    </role>
+  </component>
+
+</migration>
