@@ -28,8 +28,8 @@ function Test-UsmtLocalComputer {
     .SYNOPSIS
         Returns $true when a computer name refers to the local machine.
     .DESCRIPTION
-        Blank, 'localhost', '.', '127.0.0.1', the local COMPUTERNAME, or an FQDN
-        whose first label is the local COMPUTERNAME all count as local.
+        Blank, 'localhost', '.', '127.0.0.1', the local COMPUTERNAME, or the
+        local machine's canonical FQDN all count as local.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -40,7 +40,12 @@ function Test-UsmtLocalComputer {
     if ([string]::IsNullOrWhiteSpace($ComputerName)) { return $true }
     if ($ComputerName -eq '.' -or $ComputerName -eq 'localhost' -or $ComputerName -eq '127.0.0.1') { return $true }
     if ($ComputerName -ieq $env:COMPUTERNAME) { return $true }
-    if ($ComputerName -like "$env:COMPUTERNAME.*") { return $true }
+
+    # Match a fully-qualified name only when it equals the local machine's canonical
+    # FQDN. A prefix wildcard ("$env:COMPUTERNAME.*") would misclassify a remote host
+    # that shares our short name in a different DNS domain as local (issue #4).
+    $localFqdn = try { [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName } catch { $null }
+    if ($localFqdn -and $ComputerName -ieq $localFqdn) { return $true }
     return $false
 }
 
