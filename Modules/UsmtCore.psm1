@@ -188,7 +188,7 @@ function Copy-UsmtBinary {
     # the real cause, instead of copying a partial source and failing later at
     # the post-staging re-verification.
     foreach ($exe in 'scanstate.exe', 'loadstate.exe') {
-        if (-not (Test-Path -LiteralPath (Join-Path $BinPath $exe))) {
+        if (-not (Test-Path -LiteralPath (Join-Path $BinPath $exe) -PathType Leaf)) {
             throw "$exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
         }
     }
@@ -208,8 +208,8 @@ function Copy-UsmtBinary {
         param($RemoteBin)
         # Require BOTH executables: a partial prior copy could leave scanstate.exe
         # without loadstate.exe, and skipping staging would then break restore.
-        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')) -and
-        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe'))
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe') -PathType Leaf)
     } -ArgumentList $remoteBin
 
     if (-not $hasBinaries) {
@@ -243,8 +243,8 @@ function Copy-UsmtBinary {
     # as a confusing scanstate/loadstate error mid-run instead of here.
     $staged = Invoke-Command -Session $Session -ScriptBlock {
         param($RemoteBin)
-        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')) -and
-        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe'))
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe') -PathType Leaf)
     } -ArgumentList $remoteBin
     if (-not $staged) {
         throw "USMT binaries missing under '$remoteBin' on the remote after staging. The copy may have failed."
