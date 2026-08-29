@@ -183,8 +183,12 @@ function Copy-UsmtBinary {
 
     # --- Local: nothing to copy ---
     if (-not $Session) {
-        if (-not (Test-Path -LiteralPath (Join-Path $BinPath 'scanstate.exe'))) {
-            throw "scanstate.exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
+        # Require BOTH executables: capture uses scanstate.exe and restore uses
+        # loadstate.exe, so a set missing either is unusable.
+        foreach ($exe in 'scanstate.exe', 'loadstate.exe') {
+            if (-not (Test-Path -LiteralPath (Join-Path $BinPath $exe))) {
+                throw "$exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
+            }
         }
         return @{
             BinPath        = $BinPath
@@ -216,7 +220,7 @@ function Copy-UsmtBinary {
         # Copy the *contents* of amd64 into $remoteBin: copying the folder itself
         # nests it (C:\USMT\amd64\amd64) whenever the destination already exists
         # from a prior or interrupted run, which hides scanstate.exe.
-        Copy-Item -Path (Join-Path $BinPath '*') -Destination $remoteBin -ToSession $Session -Recurse -Force
+        Copy-Item -Path (Join-Path $BinPath '*') -Destination $remoteBin -ToSession $Session -Recurse -Force -ErrorAction Stop
     }
 
     # Always refresh exclude-rule XMLs so edits take effect on re-run.
@@ -225,8 +229,20 @@ function Copy-UsmtBinary {
         if (-not $xml) { continue }
         $leaf = Split-Path -Path $xml -Leaf
         $dest = Join-Path $remoteBin $leaf
-        Copy-Item -Path $xml -Destination $dest -ToSession $Session -Force
+        Copy-Item -Path $xml -Destination $dest -ToSession $Session -Force -ErrorAction Stop
         $remoteExclude += $dest
+    }
+
+    # Re-verify the staged binaries landed before handing back remote paths: a
+    # copy can partially fail, and returning paths to a broken set would surface
+    # as a confusing scanstate/loadstate error mid-run instead of here.
+    $staged = Invoke-Command -Session $Session -ScriptBlock {
+        param($RemoteBin)
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'scanstate.exe')) -and
+        (Test-Path -LiteralPath (Join-Path $RemoteBin 'loadstate.exe'))
+    } -ArgumentList $remoteBin
+    if (-not $staged) {
+        throw "USMT binaries missing under '$remoteBin' on the remote after staging. The copy may have failed."
     }
 
     return @{
