@@ -181,15 +181,20 @@ function Copy-UsmtBinary {
         [string[]]$ExcludeXmlPath = @()
     )
 
+    # Validate the caller-side source before either staging mode. Require BOTH
+    # executables: capture uses scanstate.exe and restore uses loadstate.exe, so
+    # a set missing either is unusable. Doing this ahead of the local/remote
+    # branch means a remote run with an incomplete cache fails here, pointing at
+    # the real cause, instead of copying a partial source and failing later at
+    # the post-staging re-verification.
+    foreach ($exe in 'scanstate.exe', 'loadstate.exe') {
+        if (-not (Test-Path -LiteralPath (Join-Path $BinPath $exe))) {
+            throw "$exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
+        }
+    }
+
     # --- Local: nothing to copy ---
     if (-not $Session) {
-        # Require BOTH executables: capture uses scanstate.exe and restore uses
-        # loadstate.exe, so a set missing either is unusable.
-        foreach ($exe in 'scanstate.exe', 'loadstate.exe') {
-            if (-not (Test-Path -LiteralPath (Join-Path $BinPath $exe))) {
-                throw "$exe not found under '$BinPath'. Run Setup.ps1 to acquire the USMT binaries."
-            }
-        }
         return @{
             BinPath        = $BinPath
             ExcludeXmlPath = @($ExcludeXmlPath)
